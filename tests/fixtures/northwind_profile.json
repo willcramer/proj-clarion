@@ -1,0 +1,129 @@
+{
+  "profile_id": "prof-northwind-fixture-001",
+  "schema_version": "0.1.0",
+  "generated_at": "2026-05-07T17:00:00Z",
+  "research_duration_seconds": 0.0,
+  "research_model": "hand-curated-fixture",
+  "company": {
+    "name": "Northwind Provisions",
+    "legal_name": "Northwind Provisions Inc.",
+    "headquarters_city": "Seattle",
+    "headquarters_country": "United States",
+    "founded_year": 2014,
+    "ownership_type": "private",
+    "employee_count_estimate": 420,
+    "primary_url": "https://www.northwind.example.com",
+    "citations": ["src-001"]
+  },
+  "industry_taxonomy": {
+    "primary_industry": "B2B Specialty Foods Marketplace",
+    "sub_industries": ["Food distribution", "Marketplace platforms"],
+    "business_model": "marketplace_multi_sided",
+    "citations": ["src-001"]
+  },
+  "revenue_signals": {
+    "annual_revenue_usd": 180000000.0,
+    "revenue_year": 2025,
+    "growth_direction": "growing",
+    "disclosed_segments": ["Buyer side", "Supplier side"],
+    "citations": ["src-001"]
+  },
+  "channels": [
+    {
+      "channel_id": "buyer_web",
+      "name": "Buyer-side web",
+      "channel_type": "d2c_web",
+      "description": "Restaurants, hotels, grocery chains placing recurring weekly orders",
+      "notable_partners": [],
+      "citations": ["src-001"]
+    },
+    {
+      "channel_id": "supplier_portal",
+      "name": "Supplier portal",
+      "channel_type": "b2b_direct",
+      "description": "Small producers and importers managing inventory and fulfillment",
+      "notable_partners": [],
+      "citations": ["src-001"]
+    }
+  ],
+  "geographic_footprint": {
+    "countries": ["United States", "Canada"],
+    "regions": ["North America"],
+    "languages": ["English"],
+    "currencies": ["USD", "CAD"],
+    "flagship_locations": [],
+    "data_center_regions": ["us-west-2"],
+    "citations": ["src-001"]
+  },
+  "tech_stack_signals": [
+    {
+      "component_type": "cloud_provider",
+      "vendor_or_product": "AWS",
+      "confidence": "medium",
+      "citations": ["src-001"],
+      "notes": "Inferred from us-west-2 region mention"
+    },
+    {
+      "component_type": "vector_db",
+      "vendor_or_product": "Pinecone",
+      "confidence": "low",
+      "citations": [],
+      "notes": "Synthesized for the AI sommelier feature"
+    }
+  ],
+  "agentic_signals": [
+    {
+      "workload_type": "search_recommendation",
+      "description": "AI sommelier agent recommends specialty products to buyers",
+      "status": "live",
+      "citations": ["src-001"]
+    },
+    {
+      "workload_type": "demand_forecasting",
+      "description": "Auto-replenishment forecasting for recurring weekly orders",
+      "status": "live",
+      "citations": ["src-001"]
+    }
+  ],
+  "recent_strategic_priorities": [
+    {
+      "priority": "Expand cold-chain logistics across new metros",
+      "source_type": "press_release",
+      "timeframe": "current_year",
+      "citations": ["src-001"]
+    }
+  ],
+  "incumbent_observability": [],
+  "pain_signals": [
+    {
+      "pain": "Cold-chain visibility — trucks lose telemetry mid-route",
+      "evidence_quote": null,
+      "severity": "high",
+      "relevance_to_observability": "direct",
+      "citations": ["src-001"]
+    }
+  ],
+  "business_entity_candidates": [
+    { "entity_type": "channel", "name": "Buyer side", "citations": ["src-001"] },
+    { "entity_type": "channel", "name": "Supplier side", "citations": ["src-001"] },
+    { "entity_type": "fulfillment_center", "name": "PNW cold-chain hub", "citations": ["src-001"] }
+  ],
+  "provenance": [
+    {
+      "citation_id": "src-001",
+      "url": "https://www.northwind.example.com/about",
+      "title": "About Northwind Provisions",
+      "fetched_at": "2026-05-07T16:30:00Z",
+      "content_type": "html",
+      "summary": "Fictional fixture company. About page describes the marketplace model and key flows.",
+      "grounded_claims": ["Marketplace structure", "Buyer/supplier segments", "Cold chain"]
+    }
+  ],
+  "synthesized_flags": [
+    {
+      "claim": "Pinecone as vector DB",
+      "field_path": "tech_stack_signals[1]",
+      "rationale": "Illustrative; not in any source. Flagged for SE review."
+    }
+  ]
+}

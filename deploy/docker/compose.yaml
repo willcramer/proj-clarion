@@ -1,0 +1,74 @@
+name: proj-clarion
+
+# Local stack — only the free, local plumbing lives here.
+# Visualization (dashboards, alerts, observability story) is on Grafana Cloud.
+# Cloud reaches the local Postgres via the PDC agent (enable with `--profile cloud`).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: clarion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clarion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clarion}
+      POSTGRES_DB: ${POSTGRES_DB:-clarion}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clarion}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pdc-agent:
+    image: grafana/pdc-agent:latest
+    container_name: clarion-pdc-agent
+    restart: unless-stopped
+    profiles: ["cloud"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GCLOUD_PDC_SIGNING_TOKEN: ${GCLOUD_PDC_SIGNING_TOKEN:-}
+      GCLOUD_HOSTED_GRAFANA_ID: ${GCLOUD_HOSTED_GRAFANA_ID:-}
+      GCLOUD_PDC_CLUSTER: ${GCLOUD_PDC_CLUSTER:-}
+    command:
+      - "-token"
+      - "$GCLOUD_PDC_SIGNING_TOKEN"
+      - "-cluster"
+      - "$GCLOUD_PDC_CLUSTER"
+      - "-gcloud-hosted-grafana-id"
+      - "$GCLOUD_HOSTED_GRAFANA_ID"
+
+  # Alloy — single OTLP hop. Local Python components (kg_publish.EntityEmitter,
+  # generator.telemetry, livetail) push OTLP to host:4318 / :4317; Alloy holds
+  # the Cloud access-policy token and forwards metrics/logs/traces to the
+  # Grafana Cloud OTLP gateway. See deploy/alloy/config.alloy for the pipeline.
+  alloy:
+    image: grafana/alloy:latest
+    container_name: clarion-alloy
+    restart: unless-stopped
+    profiles: ["cloud"]
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+      - "12345:12345"  # Alloy UI (http://localhost:12345)
+    environment:
+      GRAFANA_CLOUD_OTLP_ENDPOINT: ${GRAFANA_CLOUD_OTLP_ENDPOINT:-}
+      GRAFANA_CLOUD_OTLP_AUTH: ${GRAFANA_CLOUD_OTLP_AUTH:-}
+      CLARION_ASSERTS_ENV: ${CLARION_ASSERTS_ENV:-prod}
+      CLARION_ASSERTS_SITE: ${CLARION_ASSERTS_SITE:-demo}
+    volumes:
+      - ../alloy/config.alloy:/etc/alloy/config.alloy:ro
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+
+volumes:
+  postgres-data:

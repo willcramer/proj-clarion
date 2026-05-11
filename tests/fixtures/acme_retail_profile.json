@@ -1,0 +1,311 @@
+{
+  "profile_id": "prof-acme-retail-fixture-001",
+  "schema_version": "0.1.0",
+  "generated_at": "2026-05-07T17:00:00Z",
+  "research_duration_seconds": 0.0,
+  "research_model": "hand-curated-fixture",
+  "company": {
+    "name": "AcmeRetail",
+    "legal_name": "AcmeRetail Inc.",
+    "headquarters_city": "Dearborn",
+    "headquarters_country": "United States",
+    "founded_year": 1889,
+    "ownership_type": "family_owned",
+    "employee_count_estimate": 5600,
+    "primary_url": "https://www.acme-retail.com",
+    "citations": ["src-001", "src-002"]
+  },
+  "industry_taxonomy": {
+    "primary_industry": "Apparel and Workwear",
+    "sub_industries": ["Outdoor apparel", "Industrial workwear"],
+    "business_model": "omnichannel_retail",
+    "citations": ["src-001"]
+  },
+  "revenue_signals": {
+    "annual_revenue_usd": null,
+    "revenue_year": null,
+    "growth_direction": "growing",
+    "disclosed_segments": ["Wholesale", "D2C web", "D2C retail stores", "D2B AcmeRetail Company Gear"],
+    "citations": ["src-002", "src-003"]
+  },
+  "channels": [
+    {
+      "channel_id": "d2c_web",
+      "name": "AcmeRetail.com D2C web",
+      "channel_type": "d2c_web",
+      "description": "Direct-to-consumer e-commerce on <ERP vendor> Commerce Cloud, serving 28 countries, 6 languages, 2 currencies",
+      "notable_partners": [],
+      "citations": ["src-002"]
+    },
+    {
+      "channel_id": "d2c_stores",
+      "name": "AcmeRetail retail stores",
+      "channel_type": "d2c_retail_store",
+      "description": "Physical retail stores under AcmeRetail branding; 33 reported locations historically",
+      "notable_partners": [],
+      "citations": ["src-001"]
+    },
+    {
+      "channel_id": "d2b_company_gear",
+      "name": "AcmeRetail Company Gear",
+      "channel_type": "b2b_direct",
+      "description": "Direct-to-business channel selling branded and standard workwear to enterprises",
+      "notable_partners": ["United Airlines", "Cintas"],
+      "citations": ["src-003"]
+    },
+    {
+      "channel_id": "wholesale",
+      "name": "Wholesale partners",
+      "channel_type": "wholesale",
+      "description": "Long-standing wholesale relationships with hardware, sporting goods, and farm-supply chains",
+      "notable_partners": ["Tractor Supply", "Dick's Sporting Goods", "Home Depot", "Ace Hardware"],
+      "citations": ["src-003"]
+    },
+    {
+      "channel_id": "store_within_store",
+      "name": "Stores-within-stores and endcaps",
+      "channel_type": "store_within_store",
+      "description": "AcmeRetail-branded sections and dedicated endcaps inside partner retail locations",
+      "notable_partners": ["Tractor Supply", "Dick's Sporting Goods", "Home Depot"],
+      "citations": ["src-003"]
+    }
+  ],
+  "geographic_footprint": {
+    "countries": ["United States", "Canada", "United Kingdom", "Germany", "France", "Netherlands"],
+    "regions": ["North America", "Europe"],
+    "languages": ["English", "French", "German", "Dutch", "Italian", "Spanish"],
+    "currencies": ["USD", "EUR"],
+    "flagship_locations": ["Store NA-1 Store"],
+    "data_center_regions": ["United States", "Europe"],
+    "citations": ["src-002"]
+  },
+  "tech_stack_signals": [
+    {
+      "component_type": "erp",
+      "vendor_or_product": "<ERP vendor> S/4-class for Apparel",
+      "confidence": "high",
+      "citations": ["src-004"],
+      "notes": "Replaced legacy <ERP vendor> legacy, runs AcmeRetail's just-in-time manufacturing and distribution"
+    },
+    {
+      "component_type": "ecommerce_platform",
+      "vendor_or_product": "<ERP vendor> Commerce Cloud",
+      "confidence": "high",
+      "citations": ["src-002"],
+      "notes": "Globally unified platform serving 28 countries from two regional data centers"
+    },
+    {
+      "component_type": "cloud_provider",
+      "vendor_or_product": "Microsoft Azure",
+      "confidence": "high",
+      "citations": ["src-005"],
+      "notes": "<ERP vendor> estate runs on Azure; 96% of operations in cloud per public statements"
+    },
+    {
+      "component_type": "observability",
+      "vendor_or_product": "Dynatrace",
+      "confidence": "high",
+      "citations": ["src-006"],
+      "notes": "Used for e-commerce performance monitoring during peak periods"
+    },
+    {
+      "component_type": "apm",
+      "vendor_or_product": "Cisco AppDynamics (Splunk)",
+      "confidence": "high",
+      "citations": ["src-007"],
+      "notes": "Full-stack observability for Tier-1 critical apps including <ERP vendor> in-memory DB, e-commerce, middleware"
+    }
+  ],
+  "agentic_signals": [
+    {
+      "workload_type": "fit_sizing_assistant",
+      "description": "Fit recommendation and sizing assistance via True Fit integration on D2C web",
+      "status": "live",
+      "citations": ["src-006"]
+    },
+    {
+      "workload_type": "search_recommendation",
+      "description": "Likely product recommendations on the unified e-commerce platform; near-term agentic evolution expected",
+      "status": "likely_near_term",
+      "citations": []
+    }
+  ],
+  "recent_strategic_priorities": [
+    {
+      "priority": "Globally unified, cloud-based commerce serving D2C and D2B from a shared codebase across two regional data centers",
+      "source_type": "leadership_interview",
+      "timeframe": "current_year",
+      "citations": ["src-002"]
+    },
+    {
+      "priority": "Quarterly cadence of upgrades aligned to <ERP vendor> releases as the team gains operational maturity",
+      "source_type": "leadership_interview",
+      "timeframe": "current_year",
+      "citations": ["src-002"]
+    },
+    {
+      "priority": "Expansion of partner and wholesale channels (stores-within-stores, B2B direct sales)",
+      "source_type": "press_release",
+      "timeframe": "multi_year",
+      "citations": ["src-003"]
+    }
+  ],
+  "incumbent_observability": [
+    {
+      "vendor": "Dynatrace",
+      "scope": "E-commerce performance trends and peak-period monitoring",
+      "confidence": "high",
+      "citations": ["src-006"]
+    },
+    {
+      "vendor": "Cisco AppDynamics",
+      "scope": "Full-stack observability across <ERP vendor> in-memory DB ERP, e-commerce, and middleware connecting warehouse/inventory/distribution",
+      "confidence": "high",
+      "citations": ["src-007"]
+    }
+  ],
+  "pain_signals": [
+    {
+      "pain": "Visibility gaps inside retail stores between POS and network; root cause identification is guesswork",
+      "evidence_quote": "Public case study notes that store issues required guesswork to identify root cause across POS, network, and Wi-Fi.",
+      "severity": "high",
+      "relevance_to_observability": "direct",
+      "citations": ["src-007"]
+    },
+    {
+      "pain": "Fragmentation across multiple monitoring tools (APM, network, infrastructure) before a unified strategy",
+      "evidence_quote": "Public case studies describe a journey toward full-stack observability after vendor consolidation challenges.",
+      "severity": "medium",
+      "relevance_to_observability": "direct",
+      "citations": ["src-007"]
+    },
+    {
+      "pain": "Order-block messaging flow between channels and <ERP vendor> historically opaque and hard to monitor",
+      "evidence_quote": "Public case studies discuss the difficulty of monitoring messaging between FTP/<ERP vendor> and how visibility there changed root-cause analysis.",
+      "severity": "high",
+      "relevance_to_observability": "direct",
+      "citations": ["src-007"]
+    }
+  ],
+  "business_entity_candidates": [
+    {
+      "entity_type": "region",
+      "name": "North America",
+      "description": "US + Canada commerce footprint",
+      "citations": ["src-002"]
+    },
+    {
+      "entity_type": "region",
+      "name": "Europe",
+      "description": "EU footprint, separate data center",
+      "citations": ["src-002"]
+    },
+    {
+      "entity_type": "store",
+      "name": "Store NA-1",
+      "description": "Reported store retail location",
+      "citations": ["src-001"]
+    },
+    {
+      "entity_type": "channel",
+      "name": "D2C web",
+      "description": "acme-retail.com",
+      "citations": ["src-002"]
+    },
+    {
+      "entity_type": "channel",
+      "name": "D2B AcmeRetail Company Gear",
+      "description": "Direct-to-business sales",
+      "citations": ["src-003"]
+    },
+    {
+      "entity_type": "partner_program",
+      "name": "Tractor Supply endcaps",
+      "description": "Stores-within-stores program",
+      "citations": ["src-003"]
+    },
+    {
+      "entity_type": "fulfillment_center",
+      "name": "<HQ-city> metro fulfillment",
+      "description": "Inferred regional fulfillment hub from public manufacturing/distribution mentions",
+      "citations": ["src-001"]
+    }
+  ],
+  "provenance": [
+    {
+      "citation_id": "src-001",
+      "url": "https://www.esri.com/about/newsroom/publications/wherenext/acme-retail-omnichannel-success",
+      "title": "AcmeRetail Delivers Omnichannel Retail Success with Location Intelligence",
+      "fetched_at": "2026-05-07T16:30:00Z",
+      "content_type": "html",
+      "summary": "Esri case study on AcmeRetail's omnichannel evolution and 33 retail locations.",
+      "grounded_claims": ["33 retail stores", "<HQ-city> roots", "Omnichannel halo effect"]
+    },
+    {
+      "citation_id": "src-002",
+      "url": "https://www.asug.com/insights/how-acme-retail-achieved-global-growth-and-digital-transformation-with-erp-vendor-commerce-cloud",
+      "title": "How AcmeRetail Achieved Global Growth and Digital Transformation with <ERP vendor> Commerce Cloud",
+      "fetched_at": "2026-05-07T16:32:00Z",
+      "content_type": "html",
+      "summary": "ASUG article on AcmeRetail's commerce cloud move; 28 countries, 6 languages, 2 currencies, 2 regional data centers.",
+      "grounded_claims": ["<ERP vendor> Commerce Cloud", "28 countries", "Two regional data centers", "Quarterly upgrade cadence"]
+    },
+    {
+      "citation_id": "src-003",
+      "url": "https://blogs.cisco.com/applications/acme-retail-drives-exponential-growth-with-new-revenue-streams-backed-by-cisco-application-solutions",
+      "title": "AcmeRetail drives exponential growth with new revenue streams",
+      "fetched_at": "2026-05-07T16:34:00Z",
+      "content_type": "html",
+      "summary": "Cisco blog on AcmeRetail's expansion across stores-within-stores, endcaps, and B2B direct.",
+      "grounded_claims": ["Tractor Supply endcaps", "Home Depot", "Ace Hardware", "United Airlines D2B", "96% cloud"]
+    },
+    {
+      "citation_id": "src-004",
+      "url": "https://rizing.com/case-study/acme-retail/",
+      "title": "<ERP vendor> S/4-class Fashion Case Study | AcmeRetail",
+      "fetched_at": "2026-05-07T16:36:00Z",
+      "content_type": "html",
+      "summary": "Rizing case study on AcmeRetail's <ERP vendor> S/4-class Fashion implementation.",
+      "grounded_claims": ["<ERP vendor> S/4-class Fashion", "Replaced legacy legacy"]
+    },
+    {
+      "citation_id": "src-005",
+      "url": "https://www.microsoft.com/en/customers/story/848897-acme-retail-consumer-goods-azure",
+      "title": "AcmeRetail gains business agility with <ERP vendor> solutions on Azure",
+      "fetched_at": "2026-05-07T16:38:00Z",
+      "content_type": "html",
+      "summary": "Microsoft customer story on AcmeRetail's <ERP-vendor>-on-Azure deployment.",
+      "grounded_claims": ["<ERP vendor> on Azure", "KochaSoft partnership", "500GB to 6TB scale plan"]
+    },
+    {
+      "citation_id": "src-006",
+      "url": "https://www.the-future-of-commerce.com/2023/02/03/acme-retails-e-commerce-platform/",
+      "title": "AcmeRetail's e-commerce platform: agility, data, scale",
+      "fetched_at": "2026-05-07T16:40:00Z",
+      "content_type": "html",
+      "summary": "Future of Commerce article on AcmeRetail's 2022 holiday season operations and Dynatrace usage.",
+      "grounded_claims": ["Dynatrace use", "True Fit integration", "Holiday season scaling"]
+    },
+    {
+      "citation_id": "src-007",
+      "url": "https://developer.cisco.com/articles/acme-retail-case-study/",
+      "title": "Weaving Visibility into AcmeRetail's eCommerce Systems",
+      "fetched_at": "2026-05-07T16:42:00Z",
+      "content_type": "html",
+      "summary": "Cisco DevNet case study on AcmeRetail's full-stack observability journey with AppDynamics.",
+      "grounded_claims": ["AppDynamics use", "Tier-1 app coverage", "POS/network visibility gaps", "MSO inventory monitoring"]
+    }
+  ],
+  "synthesized_flags": [
+    {
+      "claim": "employee_count_estimate of 5600",
+      "field_path": "company.employee_count_estimate",
+      "rationale": "Public sources mention '2,800-plus American workers' for production; total headcount including retail and corporate is inferred and approximate. Flagged for SE review."
+    },
+    {
+      "claim": "<HQ-city> metro fulfillment center as a named entity",
+      "field_path": "business_entity_candidates[6]",
+      "rationale": "Public sources mention manufacturing in KY/TN and corporate HQ in Dearborn but do not explicitly name a '<HQ-city> metro fulfillment'. This is illustrative only and would be presented to the prospect as such."
+    }
+  ]
+}

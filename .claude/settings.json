@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcx help-tree*)",
+      "Bash(gcx datasources *)",
+      "Bash(gcx alert *)",
+      "Bash(gcx resources examples*)",
+      "Bash(gcx resources schemas*)",
+      "Bash(gcx sigil evaluators list*)",
+      "Bash(gcx sigil templates get*)",
+      "Bash(gcx kg entities *)",
+      "Bash(gcx kg insights *)",
+      "Bash(gcx kg search *)",
+      "Bash(gcx kg status*)",
+      "Bash(gcx kg scopes list*)",
+      "Bash(gcx kg health*)",
+      "Bash(gcx kg inspect*)",
+      "Bash(gcx kg rules list*)",
+      "Bash(gcx kg rules get*)",
+      "mcp__ccd_session__mark_chapter"
+    ]
+  }
+}

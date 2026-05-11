@@ -1,0 +1,60 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+node_modules/
+
+# === SECRETS — never commit ===
+# Match any .env variant. The setup UI writes to `.env`; backups go to
+# `.env.bak` after each save. Keep an `.env.example` template (without
+# real values) tracked so new clones know what fields exist.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+# Personal Claude Code permissions / overrides — never commit
+.claude/settings.local.json
+
+# === Generated data — never commit ===
+# These directories hold real customer profiles, LLM-generated plans,
+# and synthetic event dumps. Treat them as secrets in case any contain
+# real names / URLs the user fed into a research run.
+data/profiles/*.json
+data/plans/*.json
+data/generated/*
+data/cache/
+!data/profiles/.gitkeep
+!data/plans/.gitkeep
+!data/generated/.gitkeep
+
+# === Runtime / IDE noise ===
+.DS_Store
+*.swp
+*.log
+.idea/
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/settings.json
+
+# Docker volumes mounted into ./deploy/docker/
+deploy/docker/postgres-init/
+deploy/docker/data/
+
+# UI build artifacts (Vite)
+ui/dist/
+ui/.vite/
+
+# Editor scratch
+*.bak
+*.orig
+*.rej

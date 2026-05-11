@@ -1,0 +1,145 @@
+// Proj Clarion — Alloy config
+//
+// Role in the architecture:
+//   Local Python components (kg_publish.EntityEmitter, generator.telemetry,
+//   livetail) push OTLP to localhost:4318/4317. Alloy is the single hop that
+//   holds Grafana Cloud credentials and forwards metrics/logs/traces to
+//   Cloud's OTLP gateway. Same destination the EntityEmitter has been
+//   targeting directly in v0.4.
+//
+// Why route through Alloy at all:
+//   - Single place to hold the Cloud access-policy token (rotation, scoping,
+//     audit all happen here)
+//   - Local buffering when Cloud is briefly unreachable
+//   - Resource-attribute enrichment in one config rather than per-component
+//   - Easy to swap destination later (e.g. point at a local OTel collector
+//     for offline demos) without touching Python code
+//
+// Required env vars (read at startup):
+//   GRAFANA_CLOUD_OTLP_ENDPOINT — e.g. https://otlp-gateway-prod-us-east-0.grafana.net/otlp
+//   GRAFANA_CLOUD_OTLP_AUTH    — full Authorization header value, e.g. "Basic <base64(stack_id:token)>"
+//
+// Optional:
+//   CLARION_ASSERTS_ENV  (default "prod")  — stamped on every signal as resource attr
+//   CLARION_ASSERTS_SITE (default "demo")  — same
+
+
+// ============================================================
+// Receivers — accept OTLP from local Python components
+// ============================================================
+
+otelcol.receiver.otlp "local" {
+	grpc {
+		endpoint = "0.0.0.0:4317"
+	}
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		metrics = [otelcol.processor.memory_limiter.default.input]
+		logs    = [otelcol.processor.memory_limiter.default.input]
+		traces  = [otelcol.processor.memory_limiter.default.input]
+	}
+}
+
+
+// ============================================================
+// Processors — back-pressure, enrichment, batching
+// ============================================================
+
+// Back-pressure: drop incoming data before OOM rather than crashing.
+otelcol.processor.memory_limiter "default" {
+	check_interval   = "1s"
+	limit_percentage = 75
+	spike_limit_percentage = 15
+
+	output {
+		metrics = [otelcol.processor.resourcedetection.default.input]
+		logs    = [otelcol.processor.resourcedetection.default.input]
+		traces  = [otelcol.processor.resourcedetection.default.input]
+	}
+}
+
+// Stamp host metadata on whatever the Python apps emit (host.name etc).
+// Doesn't override what the SDK already set.
+otelcol.processor.resourcedetection "default" {
+	detectors = ["env", "system"]
+	override  = false
+
+	output {
+		metrics = [otelcol.processor.attributes.clarion.input]
+		logs    = [otelcol.processor.attributes.clarion.input]
+		traces  = [otelcol.processor.attributes.clarion.input]
+	}
+}
+
+// Make sure asserts.env / asserts.site are always present on every signal,
+// matching the convention the EntityEmitter sets per-Resource. The "insert"
+// action only adds when the key is absent — never overrides what Python set.
+//
+// Defaults for CLARION_ASSERTS_ENV/SITE come from compose.yaml's environment
+// block — Alloy's sys.env() doesn't support default-arg fallback, so we
+// rely on the compose-time `${VAR:-default}` substitution to guarantee
+// these are non-empty by the time Alloy starts.
+otelcol.processor.attributes "clarion" {
+	action {
+		key    = "asserts.env"
+		action = "insert"
+		value  = sys.env("CLARION_ASSERTS_ENV")
+	}
+	action {
+		key    = "asserts.site"
+		action = "insert"
+		value  = sys.env("CLARION_ASSERTS_SITE")
+	}
+	action {
+		key    = "alloy.routed"
+		action = "insert"
+		value  = "true"
+	}
+
+	output {
+		metrics = [otelcol.processor.batch.default.input]
+		logs    = [otelcol.processor.batch.default.input]
+		traces  = [otelcol.processor.batch.default.input]
+	}
+}
+
+otelcol.processor.batch "default" {
+	send_batch_size     = 8192
+	send_batch_max_size = 10000
+	timeout             = "5s"
+
+	output {
+		metrics = [otelcol.exporter.otlphttp.cloud.input]
+		logs    = [otelcol.exporter.otlphttp.cloud.input]
+		traces  = [otelcol.exporter.otlphttp.cloud.input]
+	}
+}
+
+
+// ============================================================
+// Exporter — forward to Grafana Cloud's OTLP gateway
+// ============================================================
+
+otelcol.auth.headers "cloud" {
+	header {
+		key   = "Authorization"
+		value = sys.env("GRAFANA_CLOUD_OTLP_AUTH")
+	}
+}
+
+otelcol.exporter.otlphttp "cloud" {
+	client {
+		// Cloud OTLP gateway. Alloy appends /v1/metrics, /v1/logs, /v1/traces
+		// per signal automatically.
+		endpoint = sys.env("GRAFANA_CLOUD_OTLP_ENDPOINT")
+		auth     = otelcol.auth.headers.cloud.handler
+
+		// Mimir's OTLP ingester only accepts cumulative temporality. The
+		// Python emitters already set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative,
+		// so this is belt-and-braces.
+		compression = "gzip"
+	}
+}

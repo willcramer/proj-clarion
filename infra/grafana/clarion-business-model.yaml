@@ -1,0 +1,253 @@
+# Grafana Cloud Knowledge Graph — Clarion Business Model
+# Rule name: clarion-business-model-1a7a1fad
+# Apply via: Grafana Assistant ("apply the clarion business model YAML")
+# or: Knowledge Graph > Custom Model Rules page
+#
+# This is the SOURCE OF TRUTH for the custom KG model in Grafana Cloud.
+# Code in src/proj_clarion/kg_publish/ must keep `clarion_entity_info`
+# (and `clarion_channel_service_affinity`) emitting label sets that
+# satisfy every `definedBy` query and every PROPERTY_MATCH relation
+# below. See docs/clarion-model.md for label-shape requirements.
+
+name: clarion-business-model-1a7a1fad
+entities:
+- type: Account
+  name: clarion_customer
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_customer!="", asserts_env!=""}
+      )
+    labelValues:
+      account_id: clarion_customer
+
+- type: Region
+  name: clarion_region_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_region_id, clarion_kube_cluster, service, namespace, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_region_id!="", asserts_env!=""}
+      )
+    labelValues:
+      region_id: clarion_region_id
+      customer: clarion_customer
+
+- type: Channel
+  name: clarion_channel_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_channel_id, clarion_kube_cluster, service, namespace, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_channel_id!="", asserts_env!=""}
+      )
+    labelValues:
+      channel_id: clarion_channel_id
+      customer: clarion_customer
+
+- type: FulfillmentCenter
+  name: clarion_fulfillment_center_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_fulfillment_center_id, clarion_region_id, clarion_kube_cluster, service, namespace, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_fulfillment_center_id!="", asserts_env!=""}
+      )
+    labelValues:
+      fulfillment_center_id: clarion_fulfillment_center_id
+      customer: clarion_customer
+      region_id: clarion_region_id
+      cluster: clarion_kube_cluster
+      service: service       # required for FulfillmentCenter→Service relation
+      namespace: namespace   # required for FulfillmentCenter→Service relation
+
+- type: Store
+  name: clarion_store_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_store_id, clarion_region_id, clarion_channel_id, clarion_kube_cluster, service, namespace, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_store_id!="", asserts_env!=""}
+      )
+    labelValues:
+      store_id: clarion_store_id
+      customer: clarion_customer
+      region_id: clarion_region_id
+      channel_id: clarion_channel_id
+      cluster: clarion_kube_cluster
+      service: service       # required for Store→Service relation
+      namespace: namespace   # required for Store→Service relation
+
+- type: Pod
+  name: clarion_pod_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_pod_id, service, namespace, clarion_kube_cluster, clarion_store_id, node, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_pod_id!="", service!="", asserts_env!=""}
+      )
+    labelValues:
+      pod_id: clarion_pod_id
+      service: service
+      namespace: namespace
+      cluster: clarion_kube_cluster
+      customer: clarion_customer
+      store: clarion_store_id  # required for Store→Pod relation
+      node: node               # required for built-in Node→Pod HOSTS relation
+
+- type: VM
+  name: clarion_vm_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_vm_id, clarion_kube_cluster, clarion_store_id, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_vm_id!="", asserts_env!=""}
+      )
+    labelValues:
+      vm_id: clarion_vm_id
+      cluster: clarion_kube_cluster
+      store: clarion_store_id
+      customer: clarion_customer
+
+- type: Node
+  name: clarion_node_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_node_id, clarion_kube_cluster, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_node_id!="", asserts_env!=""}
+      )
+    labelValues:
+      node_id: clarion_node_id
+      cluster: clarion_kube_cluster
+      customer: clarion_customer
+
+- type: LoadBalancer
+  name: clarion_loadbalancer_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_loadbalancer_id, clarion_store_id, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_loadbalancer_id!="", asserts_env!=""}
+      )
+    labelValues:
+      loadbalancer_id: clarion_loadbalancer_id
+      store: clarion_store_id
+      customer: clarion_customer
+
+- type: Database
+  name: clarion_database_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_database_id, clarion_store_id, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_database_id!="", asserts_env!=""}
+      )
+    labelValues:
+      database_id: clarion_database_id
+      store: clarion_store_id
+      customer: clarion_customer
+
+- type: Topic
+  name: clarion_topic_id
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (clarion_topic_id, clarion_store_id, clarion_customer, asserts_env, asserts_site) (
+        clarion_entity_info{clarion_topic_id!="", asserts_env!=""}
+      )
+    labelValues:
+      topic_id: clarion_topic_id
+      store: clarion_store_id
+      customer: clarion_customer
+
+# KubeCluster: defined locally rather than relying on the Asserts built-in.
+# The built-in expects `kube_state_metrics` data with specific label conventions
+# we don't replicate; defining it ourselves on `kube_node_info` (which red_emitter
+# does emit, with our `cluster` label) makes the entity materialise reliably.
+- type: KubeCluster
+  name: cluster
+  scope: { env: asserts_env, site: asserts_site }
+  definedBy:
+  - query: |
+      group by (cluster, clarion_customer, asserts_env, asserts_site) (
+        kube_node_info{cluster!="", asserts_env!=""}
+      )
+    labelValues:
+      cluster_id: cluster
+      customer: clarion_customer
+
+relations:
+# Business hierarchy
+- { type: CONTAINS, startEntityType: Account, endEntityType: Region,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [customer, env, site] } }
+- { type: CONTAINS, startEntityType: Account, endEntityType: Channel,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [customer, env, site] } }
+- { type: CONTAINS, startEntityType: Account, endEntityType: Store,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [customer, env, site] } }
+- { type: CONTAINS, startEntityType: Account, endEntityType: FulfillmentCenter,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [customer, env, site] } }
+- { type: CONTAINS, startEntityType: Region, endEntityType: Store,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [region_id, env, site] } }
+- { type: CONTAINS, startEntityType: Region, endEntityType: FulfillmentCenter,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [region_id, env, site] } }
+- { type: CONTAINS, startEntityType: Channel, endEntityType: Store,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [channel_id, env, site] } }
+
+# Business → Infrastructure bridge
+- { type: RUNS_ON, startEntityType: Store, endEntityType: KubeCluster,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [cluster, env, site], endEntityProperties: [name, env, site] } }
+- { type: RUNS_ON, startEntityType: FulfillmentCenter, endEntityType: KubeCluster,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [cluster, env, site], endEntityProperties: [name, env, site] } }
+- { type: HOSTS, startEntityType: Store, endEntityType: Service,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [service, namespace, env, site], endEntityProperties: [name, namespace, env, site] } }
+- { type: HOSTS, startEntityType: FulfillmentCenter, endEntityType: Service,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [service, namespace, env, site], endEntityProperties: [name, namespace, env, site] } }
+- { type: CONTAINS, startEntityType: Store, endEntityType: Pod,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [store, env, site] } }
+- type: SERVES
+  startEntityType: Channel
+  endEntityType: Service
+  definedBy: !<METRICS>
+    pattern: |
+      group by (clarion_channel_id, service, namespace, asserts_env, asserts_site) (
+        clarion_channel_service_affinity{clarion_channel_id!="", service!="", asserts_env!=""}
+      )
+    startEntityMatchers: { name: clarion_channel_id, env: asserts_env, site: asserts_site }
+    endEntityMatchers: { name: service, namespace: namespace, env: asserts_env, site: asserts_site }
+
+# Service → Database (USES). The planner emits a `depends_on` edge from
+# every commerce/order/inventory/etc. service to its backing database;
+# without this relation those edges show as floating DBs in the KG view.
+# Driven by `clarion_service_database_affinity{service, namespace,
+# clarion_database_id, ...}=1`, one observation per (service, db) pair,
+# emitted by red_emitter.
+- type: USES
+  startEntityType: Service
+  endEntityType: Database
+  definedBy: !<METRICS>
+    pattern: |
+      group by (service, namespace, clarion_database_id, asserts_env, asserts_site) (
+        clarion_service_database_affinity{service!="", clarion_database_id!="", asserts_env!=""}
+      )
+    startEntityMatchers: { name: service, namespace: namespace, env: asserts_env, site: asserts_site }
+    endEntityMatchers: { name: clarion_database_id, env: asserts_env, site: asserts_site }
+
+# Infrastructure
+- { type: CONTAINS, startEntityType: KubeCluster, endEntityType: Pod,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [cluster, env, site] } }
+- { type: CONTAINS, startEntityType: KubeCluster, endEntityType: Node,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [cluster, env, site] } }
+- { type: RUNS_ON, startEntityType: VM, endEntityType: KubeCluster,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [cluster, env, site], endEntityProperties: [name, env, site] } }
+- { type: CONTAINS, startEntityType: Store, endEntityType: VM,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [store, env, site] } }
+- { type: CONTAINS, startEntityType: Store, endEntityType: LoadBalancer,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [store, env, site] } }
+- { type: CONTAINS, startEntityType: Store, endEntityType: Database,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [store, env, site] } }
+- { type: CONTAINS, startEntityType: Store, endEntityType: Topic,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [name, env, site], endEntityProperties: [store, env, site] } }
+- { type: BELONGS_TO, startEntityType: Pod, endEntityType: Service,
+    definedBy: !<PROPERTY_MATCH> { startEntityProperties: [service, namespace, env, site], endEntityProperties: [name, namespace, env, site] } }
