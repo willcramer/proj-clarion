@@ -1,5 +1,5 @@
 /**
- * DrilldownPanel — the disclosure surface that opens beneath a KpiCard
+ * DrilldownPanel, the disclosure surface that opens beneath a KpiCard
  * when the user clicks it.
  *
  * Pattern:
@@ -11,7 +11,7 @@
  *   </DrilldownPanel>
  *
  * Why a panel and not a modal:
- * - Errors / token breakdowns are *contextual* — you want to scan them
+ * - Errors / token breakdowns are *contextual*, you want to scan them
  *   alongside the card you clicked, not in a centred dialog that
  *   obscures the rest of the page.
  * - Inline disclosure also keeps the keyboard story simple: tab order
@@ -29,9 +29,9 @@ import { cn } from "@/lib/cn";
 export type DrilldownPanelProps = {
   /** Must match the `controlsId` of the KpiCard that opens it. */
   id: string;
-  /** Open / closed state — caller-controlled. */
+  /** Open / closed state, caller-controlled. */
   open: boolean;
-  /** Caller's close handler — wired to the X button + Esc keypress. */
+  /** Caller's close handler, wired to the X button + Esc keypress. */
   onClose?: () => void;
   /** Title shown at the top of the panel. */
   title: string;
@@ -40,7 +40,7 @@ export type DrilldownPanelProps = {
   /** When true, render an empty-state instead of the children if
    *  children would be empty. Caller can pass any ReactNode. */
   emptyState?: ReactNode;
-  /** The drilldown rows — usually a list of errors, token breakdowns,
+  /** The drilldown rows, usually a list of errors, token breakdowns,
    *  per-phase durations, etc. */
   children?: ReactNode;
 };

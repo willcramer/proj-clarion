@@ -1,5 +1,5 @@
 /**
- * PipelineStatusPill — top-bar live indicator for the actively-followed
+ * PipelineStatusPill, top-bar live indicator for the actively-followed
  * pipeline.
  *
  * Reads PipelineContext directly (no props) and renders:
@@ -14,8 +14,8 @@
  * one followed pipeline, one click → `/pipelines/:currentId` to dive in.
  *
  * Why a separate component (vs leaving everything inline in Layout.tsx):
- * the v2 topbar wants a distinct "live signal" visual treatment — pulsing
- * accent dot, accent-bg surface, smaller height — and Layout.tsx was
+ * the v2 topbar wants a distinct "live signal" visual treatment, pulsing
+ * accent dot, accent-bg surface, smaller height, and Layout.tsx was
  * already 340+ lines. Splitting keeps both files readable and lets the
  * pill be reused later (e.g. on a future split-pane "two-pipelines"
  * dashboard).
@@ -29,7 +29,7 @@ import { usePipeline, activePhase, phaseProgress } from "@/lib/PipelineContext";
 export function PipelineStatusPill() {
   const p = usePipeline();
 
-  // Don't render at all when the context is idle — the topbar's right
+  // Don't render at all when the context is idle, the topbar's right
   // cluster collapses cleanly so we don't end up with phantom whitespace.
   if (p.status === "idle" || !p.pipelineId) return null;
 
@@ -37,7 +37,7 @@ export function PipelineStatusPill() {
   const ap = activePhase(p.phases);
 
   // Visual treatment per terminal state. Default (running) is the v2
-  // "live signal" — accent dot pulses, accent-bg surface.
+  // "live signal", accent dot pulses, accent-bg surface.
   let tone =
     "border-[color:var(--color-accent-border)] bg-[var(--color-accent-bg)] text-[var(--color-accent)] hover:bg-[color:var(--color-accent-bg)]/80";
   let label = ap ?? "running";

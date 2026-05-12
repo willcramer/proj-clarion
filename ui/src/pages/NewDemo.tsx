@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Sparkles, Globe, ChevronRight, CheckCircle2, AlertCircle, Loader2,
   ExternalLink, Square, Rocket, Clock, Activity, Bug, RefreshCw, Info,
-  History, MinusCircle, ArrowLeft,
+  History, MinusCircle, ArrowLeft, FileSearch,
 } from "lucide-react";
 
 import {
@@ -16,12 +16,13 @@ import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
 import { LogView } from "@/components/LogView";
+import { Pagination } from "@/components/Pagination";
 import { PipelineStepper } from "@/components/PipelineStepper";
 import { useToasts } from "@/components/Toast";
 import { cn } from "@/lib/cn";
 import { computeMetrics, diagnose, formatDuration } from "@/lib/diagnose";
 
-// Numbered prefix mirrors PIPELINE_PHASES order in api/pipeline.py — keeps
+// Numbered prefix mirrors PIPELINE_PHASES order in api/pipeline.py, keeps
 // the step sequence obvious in the UI ("re-run from step 4" reads better
 // than "re-run from generate"). Indexes are 1-based for human readability.
 const PHASE_LABELS: Record<PipelinePhase, string> = {
@@ -42,69 +43,25 @@ const PHASE_HINTS: Record<PipelinePhase, string> = {
   "kg-publish": "Push KG model rules; start the entity emitter.",
 };
 
+/**
+ * Build page, formerly the "Build a demo" form. The form moved to the
+ * Dashboard's HeroBuildCard, so this page now renders one of two views:
+ *
+ *   1. **Pipeline live view**, if PipelineContext has an active build,
+ *      show its phase progress, log, and controls (PipelineRunView).
+ *      Same component as before; how users land here is via
+ *      `/pipelines/:id` (loads into context, redirects to /new).
+ *
+ *   2. **Build history list**, if no pipeline is loaded, show the full
+ *      list of past builds. Click a row → open its live view. Mirrors
+ *      the "Plans" / "Profiles" page pattern: list → detail.
+ *
+ * Starting a new build lives on the Dashboard hero. Trying to do it
+ * here twice was the consolidation problem this page now solves.
+ */
 export function NewDemoPage() {
   const navigate = useNavigate();
   const pipeline = usePipeline();
-  // Pre-fill from query params when the user got here via "Add profile"
-  // on /profiles or any other deep-link. We read once on mount; if you
-  // edit the URL field after, navigating back doesn't clobber your edit.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const prefillUrl = searchParams.get("prefill_url") ?? "";
-  const prefillCompany = searchParams.get("prefill_company") ?? "";
-
-  // Form state is page-local — only the running pipeline state is global.
-  const [url, setUrl] = useState(prefillUrl);
-  const [company, setCompany] = useState(prefillCompany);
-  const [days, setDays] = useState(1);
-
-  // Once we've consumed the prefill params, strip them from the URL bar
-  // so a refresh doesn't re-prefill stale values and the bar stays clean.
-  useEffect(() => {
-    if (prefillUrl || prefillCompany) {
-      const next = new URLSearchParams(searchParams);
-      next.delete("prefill_url");
-      next.delete("prefill_company");
-      setSearchParams(next, { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // Volume preset: keep this small by default so a fresh build never
-  // accidentally fills the SE's Cloud quota. Values map to the
-  // volume_per_day override the planner accepts:
-  //   "auto"   = let the planner auto-scale (None on the wire)
-  //   "smoke"  = 500/day  → finishes in a couple minutes, dashboards still readable
-  //   "demo"   = 2500/day → default for a real walk-through
-  //   "stress" = 25000/day → stress-test the generator + Cloud ingest
-  const [volumePreset, setVolumePreset] = useState<"smoke" | "demo" | "auto" | "stress">("demo");
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  function volumeForPreset(preset: typeof volumePreset): number | undefined {
-    switch (preset) {
-      case "smoke":  return 500;
-      case "demo":   return 2_500;
-      case "stress": return 25_000;
-      case "auto":   return undefined;  // omit → planner auto-scales
-    }
-  }
-
-  async function start() {
-    if (!url.trim() || submitting) return;
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      await pipeline.start({
-        url: url.trim(),
-        company: company.trim() || undefined,
-        days,
-        volume_per_day: volumeForPreset(volumePreset),
-      });
-    } catch (e) {
-      setSubmitError(String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   async function stop() {
     if (pipeline.pipelineId) await cancelPipeline(pipeline.pipelineId).catch(() => {});
@@ -123,7 +80,7 @@ export function NewDemoPage() {
           // cost for phases that already succeeded.
           const id = pipeline.pipelineId;
           if (!id) {
-            window.alert("No pipeline_id in scope — try refreshing the page (Cmd+Shift+R).");
+            window.alert("No pipeline_id in scope, try refreshing the page (Cmd+Shift+R).");
             return;
           }
           // Guard against stale HMR where smartResume isn't on the context yet.
@@ -160,166 +117,466 @@ export function NewDemoPage() {
     );
   }
 
-  // ─── Otherwise: form ────────────────────────────────────────────
+  // ─── Otherwise: build history list ────────────────────────────────
+  return <BuildHistoryView />;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// BuildHistoryView, the /new idle render. Full paginated list of
+// every pipeline build the API knows about. Same row pattern as the
+// Dashboard's "Recent builds" section, row click navigates to
+// /pipelines/:id which loads the build into PipelineContext and
+// forwards back here (where the active-pipeline branch renders
+// PipelineRunView).
+//
+// Mirrors the Plans/Profiles pages: list → detail.
+// ──────────────────────────────────────────────────────────────────
+
+// Total phases the orchestrator runs. Mirrors PIPELINE_PHASES length;
+// hard-coded here because the table column wants a stable denominator.
+const TOTAL_PHASES = 6;
+
+// Human label per phase, matches PIPELINE_PHASES order. Reused for the
+// "Generate" / "KG publish" callout next to the phase progress bar.
+const PHASE_LABEL: Record<PipelinePhase, string> = {
+  "research":   "Research",
+  "plan":       "Plan",
+  "approve":    "Approve",
+  "generate":   "Generate",
+  "provision":  "Provision",
+  "kg-publish": "KG publish",
+};
+
+function BuildHistoryView() {
+  const navigate = useNavigate();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [filter, setFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState<"all" | "running" | "done" | "failed">("all");
+
+  const list = useQuery({
+    queryKey: ["pipelines"],
+    queryFn: listPipelines,
+    // Faster refresh when builds are running so the row badges feel live.
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      const anyRunning = (data ?? []).some((p) => p.status === "running");
+      return anyRunning ? 3_000 : 10_000;
+    },
+  });
+
+  const all = list.data ?? [];
+  const kpis = useMemo(() => computeBuildKpis(all), [all]);
+
+  // Apply filters BEFORE pagination so the page numbers reflect the
+  // filtered set, not the raw list.
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return all.filter((b) => {
+      if (stateFilter !== "all" && b.status !== stateFilter) return false;
+      if (!q) return true;
+      const host = safeHost(b.url);
+      return (
+        b.url.toLowerCase().includes(q) ||
+        host.toLowerCase().includes(q) ||
+        (b.company ?? "").toLowerCase().includes(q) ||
+        b.pipeline_id.toLowerCase().includes(q)
+      );
+    });
+  }, [all, filter, stateFilter]);
+  const total = filtered.length;
+  const paged = useMemo(
+    () => filtered.slice((page - 1) * pageSize, page * pageSize),
+    [filtered, page, pageSize],
+  );
+
+  // Reset page to 1 whenever filters narrow the result below current
+  // page's range, so the table doesn't show "empty page 4 of 1".
+  useMemo(() => { if ((page - 1) * pageSize >= total && total > 0) setPage(1); }, [page, pageSize, total]);
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <Sparkles className="text-[var(--color-accent)]" size={20} />
-          Build a demo
+      <header>
+        <div className="text-[11px] font-mono uppercase tracking-[0.08em] text-[var(--color-text-faint)]">
+          Builds
+        </div>
+        <h1 className="mt-2 text-[26px] font-semibold tracking-tight leading-tight text-[var(--color-text)]">
+          Every run, all in one place.
         </h1>
         <p className="text-[var(--color-text-muted)] mt-1 text-sm max-w-2xl">
-          One URL, one button. The pipeline does the rest: research → plan → auto-approve → generate
-          events → provision dashboards → push KG. End state: a live demo in your Grafana stack.
+          Phase, duration, status. Click any row to open its live view.{" "}
+          <span className="text-[var(--color-text-faint)]">
+            Start a new build from the dashboard&rsquo;s hero card.
+          </span>
         </p>
-        <p className="text-[var(--color-text-faint)] text-xs mt-2 max-w-2xl">
-          Safe to navigate away or close the tab — the build runs server-side and you'll pick it
-          back up here when you return.
-        </p>
-      </div>
+      </header>
 
-      <Card className="p-6 max-w-2xl">
-        <div className="space-y-4">
-          <div>
-            <label className="text-xs uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">
-              Company URL
-            </label>
-            <div className="relative">
-              <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)]" />
+      {/* KPI strip, derived from the loaded pipelines list. Cheap; bounded
+          server-side at 200 rows so the math here is O(n) at worst. */}
+      <BuildKpiStrip kpis={kpis} />
+
+      <Card className="overflow-hidden">
+        {/* Card head with title, count, and filter controls (search +
+            state). Matches CDD pipelines mockup. */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] flex-wrap">
+          <h2 className="text-sm font-medium text-[var(--color-text)]">All builds</h2>
+          <span className="text-[11px] font-mono text-[var(--color-text-faint)]">
+            {all.length.toLocaleString()} total
+            {total !== all.length && (
+              <span className="ml-1">({total.toLocaleString()} match)</span>
+            )}
+          </span>
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            <div
+              className={cn(
+                "flex items-center gap-1.5 h-8 px-2.5 rounded-md",
+                "bg-[var(--color-canvas-elev2)]/60 border border-[var(--color-border)]",
+                "focus-within:border-[color:var(--color-accent-border)] transition-colors",
+                "min-w-[200px]",
+              )}
+            >
+              <FileSearch size={12} className="text-[var(--color-text-faint)] shrink-0" />
               <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://www.acme-retail.com"
-                className="w-full pl-9 pr-3 h-10 rounded-md bg-white/[0.02] border border-[var(--color-border)] text-sm focus:border-[var(--color-accent)] focus:outline-none"
-                autoFocus
+                type="text"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter by company or host"
+                aria-label="Filter builds"
+                className={cn(
+                  "flex-1 bg-transparent outline-none border-0 text-xs",
+                  "text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]",
+                  "min-w-0",
+                )}
               />
+              {filter && (
+                <button
+                  type="button"
+                  onClick={() => setFilter("")}
+                  aria-label="Clear filter"
+                  className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
+                >
+                  ×
+                </button>
+              )}
             </div>
-            <p className="text-xs text-[var(--color-text-faint)] mt-1">
-              Must be in <code className="font-mono">RESEARCH_ALLOWED_HOSTS</code> in <code className="font-mono">.env</code>.
-            </p>
+            <select
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value as typeof stateFilter)}
+              aria-label="Filter by state"
+              className={cn(
+                "h-8 pl-2 pr-1 rounded-md text-xs font-mono",
+                "bg-[var(--color-canvas-elev2)]/60 border border-[var(--color-border)]",
+                "hover:border-[var(--color-border-strong)] focus-visible:border-[color:var(--color-accent-border)]",
+                "transition-colors",
+              )}
+            >
+              <option value="all">All states</option>
+              <option value="running">Running</option>
+              <option value="done">Done</option>
+              <option value="failed">Failed</option>
+            </select>
           </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">
-                Company hint (optional)
-              </label>
-              <input
-                value={company}
-                onChange={(e) => setCompany(e.target.value)}
-                placeholder="e.g. AcmeRetail Inc."
-                className="w-full px-3 h-10 rounded-md bg-white/[0.02] border border-[var(--color-border)] text-sm focus:border-[var(--color-accent)] focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-xs uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">
-                Days of events
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={14}
-                value={days}
-                onChange={(e) => setDays(parseInt(e.target.value, 10) || 1)}
-                className="w-full px-3 h-10 rounded-md bg-white/[0.02] border border-[var(--color-border)] text-sm focus:border-[var(--color-accent)] focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-xs uppercase tracking-wider text-[var(--color-text-muted)] block mb-1.5">
-              Build size
-            </label>
-            <div className="grid grid-cols-4 gap-2">
-              {(["smoke", "demo", "auto", "stress"] as const).map((preset) => {
-                const labels: Record<typeof preset, { title: string; sub: string }> = {
-                  smoke:  { title: "Smoke",  sub: "500/day" },
-                  demo:   { title: "Demo",   sub: "2.5K/day" },
-                  auto:   { title: "Auto",   sub: "scaled" },
-                  stress: { title: "Stress", sub: "25K/day" },
-                };
-                const { title, sub } = labels[preset];
-                const active = volumePreset === preset;
-                return (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setVolumePreset(preset)}
-                    className={cn(
-                      "h-12 px-2 rounded-md border text-left transition-all",
-                      active
-                        ? "bg-[var(--color-accent)]/10 border-[var(--color-accent)]/40 text-[var(--color-text)]"
-                        : "bg-white/[0.02] border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-white/[0.04] hover:text-[var(--color-text)]",
-                    )}
-                  >
-                    <div className="text-xs font-medium">{title}</div>
-                    <div className="text-[10px] opacity-70 font-mono">{sub}</div>
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-xs text-[var(--color-text-faint)] mt-1">
-              {volumePreset === "smoke" && "~500 events/day. Finishes in ~2-3 min, dashboards still readable. Use when iterating on planner/KG fixes."}
-              {volumePreset === "demo"  && "~2.5K events/day. Default. Realistic-looking demo, finishes in ~5-8 min."}
-              {volumePreset === "auto"  && "Planner auto-scales by channel count (1.5K-5K/day). Best when you don't know the company shape."}
-              {volumePreset === "stress" && "~25K events/day. Pressure-tests the generator + Cloud ingest. Will burn quota — use sparingly."}
-            </p>
-          </div>
-
-          {submitError && (
-            <div className="text-xs text-[var(--color-danger)] flex items-center gap-1">
-              <AlertCircle size={12} /> {submitError}
-            </div>
-          )}
-
-          <Button
-            variant="primary"
-            size="lg"
-            disabled={!url.trim() || submitting}
-            onClick={() => void start()}
-            className="w-full"
-          >
-            {submitting ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
-            Build the demo end-to-end
-          </Button>
         </div>
-      </Card>
 
-      <RecentBuilds
-        onReRun={async (s) => {
-          // Smart resume: skip phases that already succeeded in the
-          // source build. If everything was done, fall back to fresh.
-          if (typeof pipeline.smartResume !== "function") {
-            window.alert(
-              "Re-run is unavailable in this browser session. "
-              + "Hard-refresh the page (Cmd+Shift+R) to load the latest UI.",
-            );
-            return;
-          }
-          try {
-            const newId = await pipeline.smartResume(s.pipeline_id);
-            if (newId) return;
-            await pipeline.start({
-              url: s.url,
-              company: s.company ?? undefined,
-              days: s.days,
-            });
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error("smartResume failed:", err);
-            window.alert(`Re-run failed:\n\n${msg}`);
-          }
-        }}
+        {list.isLoading ? (
+          <div className="p-8 text-center text-[var(--color-text-faint)]">Loading&hellip;</div>
+        ) : all.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <History size={28} className="text-[var(--color-text-faint)] mb-3" />
+            <div className="text-sm font-medium">No builds yet</div>
+            <div className="text-xs text-[var(--color-text-muted)] mt-1 max-w-sm">
+              Start one from the dashboard&rsquo;s &ldquo;What are we showing today?&rdquo; card.
+            </div>
+          </div>
+        ) : total === 0 ? (
+          <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">
+            No builds match &ldquo;{filter}&rdquo;{stateFilter !== "all" ? ` in state ${stateFilter}` : ""}.
+          </div>
+        ) : (
+          <>
+            <table className="w-full text-sm">
+              <thead className="text-[10px] text-[var(--color-text-faint)] uppercase tracking-wider font-mono border-b border-[var(--color-border)]">
+                <tr>
+                  <th className="text-left  font-medium px-4 py-2.5">Run</th>
+                  <th className="text-left  font-medium px-4 py-2.5">Target</th>
+                  <th className="text-left  font-medium px-4 py-2.5">State</th>
+                  <th className="text-left  font-medium px-4 py-2.5">Phase</th>
+                  <th className="text-right font-medium px-4 py-2.5">Duration</th>
+                  <th className="text-right font-medium px-4 py-2.5">Started</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paged.map((b) => (
+                  <BuildHistoryRow
+                    key={b.pipeline_id}
+                    build={b}
+                    onClick={() => navigate(`/pipelines/${b.pipeline_id}`)}
+                  />
+                ))}
+              </tbody>
+            </table>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+            />
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// BuildKpiStrip: 4 tiles per the CDD pipelines mockup
+// ──────────────────────────────────────────────────────────────────
+
+interface BuildKpis {
+  runningNow: number;
+  avgRunningDurationMs: number | null;
+  todayTotal: number;
+  todaySuccess: number;
+  todayFailed: number;
+  last7Success: number | null;
+  last7Total: number;
+  p50DurationMs: number | null;
+  p95DurationMs: number | null;
+}
+
+function computeBuildKpis(rows: PipelineSummary[]): BuildKpis {
+  const now = Date.now();
+  const dayAgo = now - 24 * 3600 * 1000;
+  const weekAgo = now - 7 * 24 * 3600 * 1000;
+
+  const durMs = (b: PipelineSummary): number | null => {
+    if (!b.started_at) return null;
+    const end = b.finished_at ? new Date(b.finished_at).getTime() : now;
+    return Math.max(0, end - new Date(b.started_at).getTime());
+  };
+
+  const running = rows.filter((b) => b.status === "running");
+  const runningDurations = running.map(durMs).filter((d): d is number => d !== null);
+  const avgRunningDurationMs = runningDurations.length === 0
+    ? null
+    : runningDurations.reduce((a, b) => a + b, 0) / runningDurations.length;
+
+  const today = rows.filter((b) => new Date(b.started_at).getTime() >= dayAgo);
+  const todaySuccess = today.filter((b) => b.status === "done").length;
+  const todayFailed  = today.filter((b) => b.status === "failed" || b.status === "cancelled").length;
+
+  const lastWeek = rows.filter((b) =>
+    new Date(b.started_at).getTime() >= weekAgo
+    && (b.status === "done" || b.status === "failed" || b.status === "cancelled"),
+  );
+  const last7Total = lastWeek.length;
+  const last7Success = last7Total === 0
+    ? null
+    : lastWeek.filter((b) => b.status === "done").length / last7Total;
+
+  // Percentiles over finished builds only.
+  const finished = rows.filter((b) => b.status === "done" && b.finished_at);
+  const finishedDurs = finished
+    .map(durMs)
+    .filter((d): d is number => d !== null)
+    .sort((a, b) => a - b);
+  const pct = (p: number): number | null => {
+    if (finishedDurs.length === 0) return null;
+    const idx = Math.min(finishedDurs.length - 1, Math.floor(p * finishedDurs.length));
+    return finishedDurs[idx];
+  };
+
+  return {
+    runningNow: running.length,
+    avgRunningDurationMs,
+    todayTotal: today.length,
+    todaySuccess,
+    todayFailed,
+    last7Success,
+    last7Total,
+    p50DurationMs: pct(0.5),
+    p95DurationMs: pct(0.95),
+  };
+}
+
+function BuildKpiStrip({ kpis }: { kpis: BuildKpis }) {
+  const successPct = kpis.last7Success === null ? null : Math.round(kpis.last7Success * 100);
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <KpiTile
+        label="Running now"
+        value={kpis.runningNow.toLocaleString()}
+        hint={kpis.avgRunningDurationMs !== null
+          ? `avg ${formatDuration(kpis.avgRunningDurationMs)}`
+          : "none in flight"}
+        tone={kpis.runningNow > 0 ? "live" : "neutral"}
+      />
+      <KpiTile
+        label="Today"
+        value={kpis.todayTotal.toLocaleString()}
+        hint={kpis.todayTotal > 0
+          ? `${kpis.todaySuccess} success · ${kpis.todayFailed} failed`
+          : "no builds today"}
+        tone="neutral"
+      />
+      <KpiTile
+        label="7-day success"
+        value={successPct === null ? "," : `${successPct}%`}
+        hint={kpis.last7Total > 0 ? `across ${kpis.last7Total} finished` : "no finished runs"}
+        tone={successPct === null ? "neutral" : successPct >= 80 ? "live" : successPct >= 50 ? "warn" : "danger"}
+      />
+      <KpiTile
+        label="P50 duration"
+        value={kpis.p50DurationMs !== null ? formatDuration(kpis.p50DurationMs) : ","}
+        hint={kpis.p95DurationMs !== null ? `P95 ${formatDuration(kpis.p95DurationMs)}` : "no data yet"}
+        tone="neutral"
       />
     </div>
   );
 }
 
+function KpiTile({
+  label, value, hint, tone,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  tone: "live" | "neutral" | "warn" | "danger";
+}) {
+  const valueClass =
+    tone === "live"   ? "text-[var(--color-live)]"
+  : tone === "warn"   ? "text-[var(--color-warning)]"
+  : tone === "danger" ? "text-[var(--color-danger)]"
+  : "text-[var(--color-text)]";
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] p-4">
+      <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+        {label}
+      </div>
+      <div className={cn("text-[26px] font-semibold tabular-nums mt-1 leading-none", valueClass)}>
+        {value}
+      </div>
+      <div className="text-[11px] text-[var(--color-text-muted)] mt-2">{hint}</div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// BuildHistoryRow: includes the inline phase progress bar
+// ──────────────────────────────────────────────────────────────────
+
+function BuildHistoryRow({
+  build, onClick,
+}: { build: PipelineSummary; onClick: () => void }) {
+  const flag =
+    build.status === "running"   ? "live"   :
+    build.status === "failed"    ? "danger" :
+    build.status === "cancelled" ? "warn"   :
+    "muted";
+  const tone =
+    build.status === "running"   ? "info"    :
+    build.status === "done"      ? "success" :
+    build.status === "failed"    ? "danger"  :
+    "warning";
+  const host = safeHost(build.url);
+  const dur = (() => {
+    if (!build.started_at) return null;
+    const end = build.finished_at ? new Date(build.finished_at).getTime() : Date.now();
+    return end - new Date(build.started_at).getTime();
+  })();
+
+  // Phase progress derives directly from the server-side rollup.
+  // For "done" rows the bar fills 6/6; for running, phases_done is the
+  // already-completed count and current_phase names the in-flight one;
+  // for failed, the bar stops at phases_done and renders red.
+  const phasesDone = build.phases_done ?? 0;
+  const progressTo = build.status === "done" ? TOTAL_PHASES : phasesDone;
+  const phaseLabel = build.status === "running"
+    ? (build.current_phase ? PHASE_LABEL[build.current_phase as PipelinePhase] : "running")
+    : build.status === "done"
+      ? "KG publish"
+      : build.status === "failed" && build.current_phase
+        ? `failed at ${PHASE_LABEL[build.current_phase as PipelinePhase]}`
+        : build.status;
+  const barFill =
+    build.status === "failed"   ? "bg-[var(--color-danger)]"
+  : build.status === "running"  ? "bg-[var(--color-accent)]"
+  : build.status === "done"     ? "bg-[var(--color-live)]"
+  : "bg-[var(--color-text-faint)]";
+
+  return (
+    <tr
+      onClick={onClick}
+      className="border-b border-[var(--color-border)] last:border-0 hover:bg-white/[0.02] cursor-pointer transition-colors"
+    >
+      <td className="px-4 py-3 font-mono text-xs whitespace-nowrap">
+        <span className={cn("row-flag", flag)} aria-hidden="true" />
+        {build.pipeline_id.slice(0, 8)}
+      </td>
+      <td className="px-4 py-3 text-[var(--color-text)]">
+        {host}
+        {build.company && (
+          <span className="ml-2 font-mono text-[11px] text-[var(--color-text-faint)]">
+            {build.company}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        <Badge tone={tone}>{build.status}</Badge>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums whitespace-nowrap">
+            {progressTo}/{TOTAL_PHASES}
+          </span>
+          <div
+            aria-hidden="true"
+            className="w-[60px] h-[4px] rounded-full bg-[var(--color-canvas-elev2)] overflow-hidden shrink-0"
+          >
+            <div
+              className={cn("h-full transition-all", barFill)}
+              style={{ width: `${(progressTo / TOTAL_PHASES) * 100}%` }}
+            />
+          </div>
+          <span className="text-xs text-[var(--color-text-muted)] truncate">
+            {phaseLabel}
+          </span>
+        </div>
+      </td>
+      <td className="px-4 py-3 text-right tabular-nums font-mono text-xs text-[var(--color-text-muted)]">
+        {formatDuration(dur)}
+      </td>
+      <td className="px-4 py-3 text-right text-xs text-[var(--color-text-faint)] tabular-nums">
+        {build.started_at ? formatRelativeTime(build.started_at) : ","}
+      </td>
+    </tr>
+  );
+}
+
+function safeHost(url: string): string {
+  if (!url) return "";
+  try { return new URL(url).host.replace(/^www\./, ""); }
+  catch { return url; }
+}
+
+function formatRelativeTime(iso: string): string {
+  const d = new Date(iso);
+  const diffMs = Date.now() - d.getTime();
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
+}
+
 /** Last 5 builds the API process has seen. Each row deep-links into
  *  /pipelines?p=<id> for full per-event drill-in (logs, phase rollup,
  *  diagnosis). The Re-run button kicks off a fresh build with the same
- *  params — useful when the previous one failed late (e.g. kg-publish)
+ *  params, useful when the previous one failed late (e.g. kg-publish)
  *  and you want a clean retry without retyping the URL.
  *
  *  Pipeline history lives in-memory on the API process today, so this
@@ -379,8 +636,7 @@ function RecentBuilds({ onReRun }: { onReRun: (s: PipelineSummary) => void }) {
           All <ChevronRight size={12} />
         </Link>
       </div>
-      {/* Running builds get their own visually-distinct group on top —
-       *  with a faint accent border so the SE eye lands there first
+      {/* Running builds get their own visually-distinct group on top,        *  with a faint accent border so the SE eye lands there first
        *  when they're juggling multiple in-flight pipelines. */}
       {running.length > 0 && (
         <div className="mb-3 pb-3 border-b border-[var(--color-border)] space-y-1">
@@ -473,7 +729,7 @@ function PipelineRunView({
 
   const metrics = useMemo(
     () => computeMetrics(p.phases, p.startedAt ?? null, p.finishedAt ?? null),
-    // tick intentional — re-render the live ticker
+    // tick intentional, re-render the live ticker
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [p.phases, p.startedAt, p.finishedAt, tick],
   );
@@ -487,7 +743,7 @@ function PipelineRunView({
   }, [p.status, p.error, p.phases, metrics.phaseFailed]);
 
   // Click a phase row to lock the right-side log panel to that phase.
-  // Null means "auto" — show whichever phase is currently active (or
+  // Null means "auto", show whichever phase is currently active (or
   // the last one to emit anything). Set state per phase row click.
   const [focusPhase, setFocusPhase] = useState<PipelinePhase | null>(null);
 
@@ -513,39 +769,119 @@ function PipelineRunView({
         tone: "danger",
         title: "Build failed",
         body: p.error ?? "Open the diagnosis card below for the suggested fix.",
-        duration: 0,  // sticky — failures shouldn't disappear
+        duration: 0,  // sticky, failures shouldn't disappear
       });
     }
     prevStatus.current = p.status;
   }, [p.status, p.url, p.planId, p.error, toasts, navigate]);
 
+  // Auto-focus the currently-running phase (or the most recently
+  // active one if everything's terminal) when the user hasn't clicked
+  // to lock a different one. The `focusPhase` state stays null while
+  // we're auto-tracking; clicking a column flips it explicit and
+  // sticks there until the user clicks again to unlock.
+  const autoActive = useMemo<PipelinePhase>(() => {
+    // First running phase, otherwise the last done/failed one,
+    // otherwise the first pending one.
+    const running = PIPELINE_PHASES.find((ph) => p.phases[ph].status === "running");
+    if (running) return running;
+    const failed = PIPELINE_PHASES.find((ph) => p.phases[ph].status === "failed");
+    if (failed) return failed;
+    // last done
+    let lastDone: PipelinePhase | null = null;
+    for (const ph of PIPELINE_PHASES) {
+      if (p.phases[ph].status === "done") lastDone = ph;
+    }
+    return lastDone ?? PIPELINE_PHASES[0];
+  }, [p.phases]);
+  const activePhase: PipelinePhase = focusPhase ?? autoActive;
+  const activeState = p.phases[activePhase];
+  const activeMetric = metrics.phases.find((m) => m.phase === activePhase);
+
+  // Aggregated meta for the head strip. computeMetrics already does
+  // the line + error rollup so just read from there instead of doing
+  // it twice.
+  const phasesDoneCount = useMemo(
+    () => PIPELINE_PHASES.filter((ph) => p.phases[ph].status === "done").length,
+    [p.phases],
+  );
+
+  const eyebrow =
+    p.status === "running" ? "Building demo"
+  : p.status === "done"    ? "Demo is live"
+  : p.status === "failed"  ? "Build failed"
+  : p.status === "cancelled" ? "Build cancelled"
+  : "Pipeline";
+
+  // Per-phase resume handler. Called from the side panel's "Re-run
+  // from here" button. Reuses the same startFromPhase wiring that the
+  // old PhaseRow had, so behavior is unchanged.
+  function disabledReasonFor(phase: PipelinePhase): string | undefined {
+    if (phase === "plan" && !p.profileId) return "research never produced a profile";
+    if (["approve", "generate", "provision", "kg-publish"].includes(phase) && !p.planId) {
+      return "plan was never produced";
+    }
+    return undefined;
+  }
+  async function resumeFromPhase(phase: PipelinePhase) {
+    if (typeof p.startFromPhase !== "function") {
+      window.alert(
+        "Per-phase re-run is unavailable in this browser session. "
+        + "Hard-refresh the page (Cmd+Shift+R) to load the latest UI.",
+      );
+      return;
+    }
+    try {
+      await p.startFromPhase({
+        phase,
+        url: p.url,
+        company: p.company ?? undefined,
+        days: p.days,
+        profile_id: p.profileId ?? undefined,
+        plan_id: p.planId ?? undefined,
+        parent_pipeline_id: p.pipelineId ?? undefined,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`re-run from ${phase} failed:`, err);
+      window.alert(`Re-run from ${phase} failed:\n\n${msg}`);
+    }
+  }
+
+  const host = (() => {
+    if (!p.url) return "";
+    try { return new URL(p.url).host.replace(/^www\./, ""); }
+    catch { return p.url; }
+  })();
+
   return (
     <div className="space-y-4">
-      {/* Back link — drops the user into the form view (which has the
-       *  build form on top + the Recent Builds list below). The pipeline
-       *  itself keeps running server-side; this is just navigation, not
-       *  cancel. Mirrors the same affordance on /profiles/<id>, /plans/<id>. */}
+      {/* Back to builds, drops the user back to the builds list. The
+          pipeline keeps running server-side; this is just navigation. */}
       <button
         type="button"
         onClick={onReset}
-        className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1 -mb-2"
-        title="Go back to the build form + recent builds list. This pipeline keeps running server-side."
+        className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1"
+        title="Back to the builds list. This pipeline keeps running server-side."
       >
         <ArrowLeft size={14} /> Back to builds
       </button>
-      <div className="flex items-center justify-between">
-        <div className="text-sm">
-          <span className="text-[var(--color-text-muted)]">Building from</span>{" "}
-          <span className="font-mono">{p.url}</span>
-          {p.company && <span className="text-[var(--color-text-faint)]"> · {p.company}</span>}
-          <span className="text-[var(--color-text-faint)]"> · {p.days}d</span>
-          {p.pipelineId && (
-            <span className="text-[var(--color-text-faint)] font-mono ml-3">
-              pipeline {p.pipelineId.slice(0, 8)}
-            </span>
-          )}
+
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-[11px] font-mono uppercase tracking-[0.08em] text-[var(--color-text-faint)]">
+            {eyebrow}
+          </div>
+          <h1 className="mt-1 text-[24px] font-semibold tracking-tight leading-tight text-[var(--color-text)] truncate">
+            {host || "Pipeline"}
+            {p.pipelineId && (
+              <span className="ml-2 font-mono text-[14px] text-[var(--color-text-faint)] font-normal">
+                {p.pipelineId.slice(0, 8)}{p.days ? ` · ${p.days}d` : ""}
+              </span>
+            )}
+          </h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
           {p.status === "running" && (
             <Button size="sm" variant="danger" onClick={onStop}>
               <Square size={12} /> Stop
@@ -557,7 +893,7 @@ function PipelineRunView({
                 size="sm"
                 variant="primary"
                 onClick={onReRunSame}
-                title="Smart resume: skip phases that already succeeded, reuse existing profile/plan, only re-run from the first non-done phase. Cheap and fast."
+                title="Smart resume: skip phases that already succeeded, reuse existing profile/plan."
               >
                 <RefreshCw size={12} /> Re-run
               </Button>
@@ -565,20 +901,13 @@ function PipelineRunView({
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  // Force restart = discard everything, run from research.
-                  // Distinct from Re-run because it re-pays the LLM cost
-                  // on research + plan even if those succeeded. Use only
-                  // when the existing profile/plan are bad and you want
-                  // them regenerated. Confirmation is mandatory.
                   const ok = window.confirm(
                     "Force restart will run the entire pipeline from scratch:\n\n"
                     + "  • A NEW profile_id (research agent runs again)\n"
                     + "  • A NEW plan_id (planner agent makes 8+ LLM calls)\n"
                     + "  • Generate, Provision, KG-publish all re-run\n\n"
                     + "Cost: ~5-10 minutes + several dollars in LLM tokens.\n\n"
-                    + "If you only want to retry a failed phase, click Re-run instead "
-                    + "— that smart-resumes from where this build broke and reuses "
-                    + "the existing profile + plan.\n\n"
+                    + "If you only want to retry a failed phase, click Re-run instead.\n\n"
                     + "Continue with Force restart?",
                   );
                   if (!ok) return;
@@ -588,7 +917,7 @@ function PipelineRunView({
                   p.reset();
                   if (u) void p.start({ url: u, company: c, days: d });
                 }}
-                title="Discard this pipeline and run from research again with the same URL. Pays the full LLM cost — use Re-run for cheap resume."
+                title="Discard this pipeline and run from research again."
                 className="!text-[var(--color-warning)] hover:!bg-[var(--color-warning)]/10"
               >
                 <AlertCircle size={12} /> Force restart
@@ -597,7 +926,7 @@ function PipelineRunView({
                 size="sm"
                 variant="secondary"
                 onClick={onReset}
-                title="Go to the build form to start a fresh build for a different URL — this pipeline keeps running server-side and you can find it again under /pipelines"
+                title="Back to the builds list."
               >
                 <Sparkles size={12} /> New build
               </Button>
@@ -606,107 +935,162 @@ function PipelineRunView({
         </div>
       </div>
 
-      <MetricsStrip metrics={metrics} status={p.status} />
-
-      {/* Visual stepper — at-a-glance phase progress with per-step
-          duration / error counts. Click a step to focus its log panel.
-          The detailed PhaseRow grid below stays for the resume/re-run
-          actions and the artifact links. */}
-      <Card className="p-4">
-        <PipelineStepper
-          phases={p.phases}
-          metrics={metrics.phases}
-          focusedPhase={focusPhase}
-          onStepClick={(phase) =>
-            setFocusPhase(focusPhase === phase ? null : phase)
-          }
-        />
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-6">
-        <Card className="p-4">
-          <div className="space-y-1">
-            {PIPELINE_PHASES.map((phase, i) => {
-              // Re-run button visibility:
-              //   - failed phase   → "Re-run" (primary affordance — fix path)
-              //   - done phase     → "Re-run" too (testing iteration —
-              //                       e.g. push updated KG model rules
-              //                       without redoing research+plan)
-              //   - pending/running/skipped → no button (nothing to redo)
-              // Both flavors call the same backend (`startFromPhase`); the
-              // only difference is wording so the user knows what they're
-              // doing.
-              const phaseStatus = p.phases[phase].status;
-              const isFailed = phaseStatus === "failed";
-              const isDone = phaseStatus === "done";
-              const showResume = isFailed || isDone;
-              let canResume = false;
-              let disabledReason: string | undefined;
-              if (showResume) {
-                if (phase === "plan" && !p.profileId) {
-                  disabledReason = "research never produced a profile";
-                } else if (
-                  ["approve", "generate", "provision", "kg-publish"].includes(phase) &&
-                  !p.planId
-                ) {
-                  disabledReason = "plan was never produced";
-                } else {
-                  canResume = true;
-                }
-              }
-              // Inside PipelineRunView the context is destructured as
-              // `p`, not `pipeline`. Earlier I wrote `pipeline.*` here and
-              // it threw `ReferenceError: pipeline is not defined` on
-              // every per-phase Re-run click — that's why "click does
-              // nothing": the async callback rejected immediately.
-              const onResume = canResume
-                ? async () => {
-                    if (typeof p.startFromPhase !== "function") {
-                      window.alert(
-                        "Per-phase re-run is unavailable in this browser session. "
-                        + "Hard-refresh the page (Cmd+Shift+R) to load the latest UI.",
-                      );
-                      return;
-                    }
-                    try {
-                      await p.startFromPhase({
-                        phase,
-                        url: p.url,
-                        company: p.company ?? undefined,
-                        days: p.days,
-                        profile_id: p.profileId ?? undefined,
-                        plan_id: p.planId ?? undefined,
-                        parent_pipeline_id: p.pipelineId ?? undefined,
-                      });
-                    } catch (err) {
-                      const msg = err instanceof Error ? err.message : String(err);
-                      console.error(`re-run from ${phase} failed:`, err);
-                      window.alert(`Re-run from ${phase} failed:\n\n${msg}`);
-                    }
-                  }
-                : undefined;
-              return (
-                <PhaseRow
-                  key={phase}
-                  phase={phase}
-                  state={p.phases[phase]}
-                  metric={metrics.phases.find((m) => m.phase === phase)}
-                  isLast={i === PIPELINE_PHASES.length - 1}
-                  onResume={onResume}
-                  resumeDisabledReason={disabledReason}
-                  showResume={showResume}
-                  resumeIsRetest={isDone}
-                  focused={focusPhase === phase}
-                  onClick={() => setFocusPhase(
-                    focusPhase === phase ? null : phase,
-                  )}
-                />
-              );
-            })}
+      {/* Single horizontal "journey" card. Replaces the old MetricsStrip +
+          PipelineStepper + 2-col PhaseRow/PhaseDetail layout. */}
+      <div className="journey">
+        <div className="journey-head">
+          <div className="journey-target">
+            <Rocket size={14} className="text-[var(--color-accent)]" />
+            <span className="text-[var(--color-text-faint)]">target</span>
+            <span>{host || p.url}</span>
           </div>
-        </Card>
+          <div className="journey-meta">
+            <div>
+              <span className="text-[var(--color-text-faint)]">elapsed</span>
+              <b>{formatDuration(metrics.totalDurationMs)}</b>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-faint)]">phases</span>
+              <b>{phasesDoneCount}<span className="text-[var(--color-text-faint)]">/{PIPELINE_PHASES.length}</span></b>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-faint)]">log lines</span>
+              <b>{metrics.totalLogLines.toLocaleString()}</b>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-faint)]">events</span>
+              <b className={metrics.totalErrors > 0 ? "!text-[var(--color-danger)]" : ""}>
+                {metrics.totalErrors} err
+              </b>
+            </div>
+          </div>
+        </div>
 
-        <PhaseDetail phases={p.phases} focusPhase={focusPhase} onClearFocus={() => setFocusPhase(null)} />
+        <div className="journey-steps">
+          {PIPELINE_PHASES.map((phase, i) => {
+            const state = p.phases[phase];
+            const isFocus = activePhase === phase;
+            const m = metrics.phases.find((x) => x.phase === phase);
+            const num = String(i + 1).padStart(2, "0");
+            const label = PHASE_LABELS[phase].replace(/^\d+\s·\s/, "");
+            const stateClass =
+              state.status === "done"    ? "done"
+            : state.status === "running" ? "running"
+            : state.status === "failed"  ? "failed"
+            : state.status === "skipped" ? "skipped"
+            : "pending";
+            const Icon =
+              state.status === "done"    ? CheckCircle2
+            : state.status === "running" ? Loader2
+            : state.status === "failed"  ? AlertCircle
+            : state.status === "skipped" ? MinusCircle
+            : MinusCircle;
+            const durationLabel = m?.durationMs != null
+              ? formatDuration(m.durationMs)
+              : state.status === "skipped" ? "skipped"
+              : state.status === "pending" ? "queued"
+              : "—";
+            const linesLabel = state.logs.length > 0
+              ? `${state.logs.length} lines`
+              : state.status === "running" ? "streaming…"
+              : state.status === "pending" ? "—"
+              : "";
+            return (
+              <button
+                key={phase}
+                type="button"
+                onClick={() => setFocusPhase(focusPhase === phase ? null : phase)}
+                aria-pressed={isFocus}
+                className={cn("journey-step", stateClass, isFocus && "is-active")}
+              >
+                <div className="journey-step-head">
+                  <div className="journey-step-icon">
+                    <Icon
+                      size={14}
+                      className={state.status === "running" ? "animate-spin" : ""}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="journey-step-no">{num}</div>
+                    <h3 className="journey-step-name truncate">{label}</h3>
+                  </div>
+                </div>
+                <div className="journey-step-meta">
+                  <span>{durationLabel}</span>
+                  {linesLabel && <span>{linesLabel}</span>}
+                </div>
+                <div className="journey-step-bar"><i /></div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Detail row: phase side panel + live log. The log pane just
+            renders the focused phase's raw lines. */}
+        <div className="journey-detail">
+          <div className="journey-side">
+            <div className="flex items-center justify-between gap-2">
+              <h3>
+                <span className="text-[var(--color-text-faint)] font-mono mr-2">
+                  {String(PIPELINE_PHASES.indexOf(activePhase) + 1).padStart(2, "0")}
+                </span>
+                {PHASE_LABELS[activePhase].replace(/^\d+\s·\s/, "")}
+              </h3>
+              <PhaseStatusBadge status={activeState.status} />
+            </div>
+            <p className="desc">
+              {activeState.message || PHASE_HINTS[activePhase]}
+            </p>
+            <div className="journey-stats">
+              <div>
+                <div className="l">Elapsed</div>
+                <div className="v">{formatDuration(activeMetric?.durationMs ?? null)}</div>
+              </div>
+              <div>
+                <div className="l">Log lines</div>
+                <div className="v tabular-nums">{activeState.logs.length.toLocaleString()}</div>
+              </div>
+              <div>
+                <div className="l">Status</div>
+                <div className="v capitalize">{activeState.status}</div>
+              </div>
+              <div>
+                <div className="l">Artifact</div>
+                <div className="v font-mono text-[12px] truncate">
+                  {activeState.artifact ? activeState.artifact.slice(0, 10) : "—"}
+                </div>
+              </div>
+            </div>
+            {(activeState.status === "failed" || activeState.status === "done") && (
+              <div className="flex items-center gap-2 mt-1">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void resumeFromPhase(activePhase)}
+                  disabled={!!disabledReasonFor(activePhase)}
+                  title={disabledReasonFor(activePhase) ?? `Re-run starting from ${PHASE_LABELS[activePhase]}.`}
+                >
+                  <RefreshCw size={12} /> Re-run from here
+                </Button>
+              </div>
+            )}
+          </div>
+          <div className="journey-log">
+            {activeState.logs.length === 0 ? (
+              <div className="text-[var(--color-text-faint)] italic">
+                {activeState.status === "pending"
+                  ? `${PHASE_LABELS[activePhase].replace(/^\d+\s·\s/, "")} hasn't started yet.`
+                  : activeState.status === "skipped"
+                    ? `${PHASE_LABELS[activePhase].replace(/^\d+\s·\s/, "")} was skipped.`
+                    : "No log output yet."}
+              </div>
+            ) : (
+              activeState.logs.map((line, idx) => (
+                <LogLine key={idx} line={line} />
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       {p.error && dx && (
@@ -761,6 +1145,74 @@ function PipelineRunView({
   );
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Side-panel + log helpers for the journey card.
+// ──────────────────────────────────────────────────────────────────
+
+function PhaseStatusBadge({ status }: { status: PhaseState["status"] }) {
+  const tone =
+    status === "running" ? "accent"
+  : status === "done"    ? "success"
+  : status === "failed"  ? "danger"
+  : status === "skipped" ? "neutral"
+  : "neutral";
+  const icon =
+    status === "running" ? <Loader2 size={10} className="animate-spin" />
+  : status === "done"    ? <CheckCircle2 size={10} />
+  : status === "failed"  ? <AlertCircle size={10} />
+  : status === "skipped" ? <MinusCircle size={10} />
+  : <Clock size={10} />;
+  return (
+    <Badge tone={tone}>
+      {icon}
+      <span className="ml-0.5">{status}</span>
+    </Badge>
+  );
+}
+
+/** Render one log line with subtle level-coloring. Matches the CDD
+ *  `.journey-log .line` treatment: faint timestamp prefix, colored
+ *  `info` / `ok` / `warn` / `err` token, then the rest in muted text. */
+function LogLine({ line }: { line: string }) {
+  // Strip ANSI escape codes that some upstream phases dump into the
+  // log stream; they're meaningless once we're styling via CSS classes.
+  // eslint-disable-next-line no-control-regex
+  const clean = line.replace(/\x1b\[[0-9;]*m/g, "");
+
+  // Best-effort parse: "HH:MM:SS LEVEL  rest" or just "LEVEL  rest".
+  // Anything we can't match falls through as plain text.
+  const m = clean.match(/^(\d{1,2}:\d{2}:\d{2}(?:\.\d+)?)?\s*(info|ok|warn|warning|error|err|debug|trace)?\s*(.*)$/i);
+  const ts = m?.[1] ?? null;
+  const rawLevel = m?.[2]?.toLowerCase() ?? null;
+  const rest = m?.[3] ?? clean;
+
+  let lvlClass: string | null = null;
+  let lvlLabel: string | null = null;
+  if (rawLevel) {
+    if (rawLevel === "info" || rawLevel === "debug" || rawLevel === "trace") {
+      lvlClass = "lvl-info"; lvlLabel = rawLevel;
+    } else if (rawLevel === "ok") {
+      lvlClass = "lvl-ok"; lvlLabel = "ok";
+    } else if (rawLevel === "warn" || rawLevel === "warning") {
+      lvlClass = "lvl-warn"; lvlLabel = "warn";
+    } else if (rawLevel === "error" || rawLevel === "err") {
+      lvlClass = "lvl-err"; lvlLabel = "err";
+    }
+  } else if (/error|traceback|exception|fail/i.test(rest)) {
+    // Fallback: any line that mentions an error/traceback gets the
+    // red tint so failures stand out even without an explicit level.
+    lvlClass = "lvl-err"; lvlLabel = "err";
+  }
+
+  return (
+    <div className="line">
+      {ts && <span className="ts">{ts}</span>}
+      {lvlLabel && <span className={lvlClass!}>{lvlLabel}</span>}
+      <span>{rest}</span>
+    </div>
+  );
+}
+
 function PhaseRow({
   phase, state, metric, isLast,
   onResume, resumeDisabledReason, showResume, resumeIsRetest,
@@ -809,7 +1261,7 @@ function PhaseRow({
         !isLast && "border-b border-[var(--color-border)]",
         onClick && "cursor-pointer",
         // Skipped phases (resume-from-later builds) get muted so they
-        // visually fade into the background. They're not errors — they
+        // visually fade into the background. They're not errors, they
         // just didn't run this time.
         state.status === "skipped" && "opacity-55",
         focused
@@ -864,7 +1316,7 @@ function PhaseRow({
             !onResume
               ? resumeDisabledReason ?? "Inputs for this phase aren't available"
               : resumeIsRetest
-              ? `Re-test ${PHASE_LABELS[phase]} only — useful when iterating on the code that affects this phase. Reuses profile + plan; new pipeline_id linked to this one as parent.`
+              ? `Re-test ${PHASE_LABELS[phase]} only, useful when iterating on the code that affects this phase. Reuses profile + plan; new pipeline_id linked to this one as parent.`
               : `Re-run from ${PHASE_LABELS[phase]} (skips earlier phases, reuses profile/plan from this build)`
           }
           className={cn(
@@ -889,7 +1341,7 @@ function PhaseRow({
 }
 
 /** Top-of-page key metrics. While running, total ticks live; on terminal
- *  status, freezes at the final values. Kept compact — meant for a
+ *  status, freezes at the final values. Kept compact, meant for a
  *  glance, not deep analysis. */
 function MetricsStrip({
   metrics, status,
@@ -1049,7 +1501,7 @@ function PhaseDetail({
             {isManual && (
               <button
                 onClick={onClearFocus}
-                title="Unlock — let the panel auto-track the active phase"
+                title="Unlock, let the panel auto-track the active phase"
                 className="text-[10px] font-mono text-[var(--color-accent)]/70 hover:text-[var(--color-accent)] uppercase tracking-wider"
               >
                 locked · clear

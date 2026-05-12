@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-/** Glass card primitive — the canvas-on-canvas surface used everywhere. */
+/** Glass card primitive, the canvas-on-canvas surface used everywhere. */
 export function Card({
   children,
   className,

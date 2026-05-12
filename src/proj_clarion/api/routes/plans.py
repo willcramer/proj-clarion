@@ -50,6 +50,58 @@ class AuditEntry(BaseModel):
     note: str | None
 
 
+class GlobalAuditEntry(BaseModel):
+    """Plan-audit row enriched for the global Audit page — includes
+    plan_id + source URL/company so each row reads on its own."""
+
+    timestamp: datetime
+    plan_id: str | None
+    actor: str
+    action: str
+    from_state: str | None
+    to_state: str | None
+    note: str | None
+    url: str | None
+    company: str | None
+
+
+class GlobalAuditResponse(BaseModel):
+    entries: list[GlobalAuditEntry]
+    total: int
+    limit: int
+    offset: int
+
+
+# IMPORTANT: this route lives BEFORE `/{plan_id}` so FastAPI doesn't
+# match the literal "audit" as a plan_id and 404 on resolve.
+@router.get("/audit", response_model=GlobalAuditResponse)
+def global_audit(limit: int = 100, offset: int = 0) -> GlobalAuditResponse:
+    """Plan-audit log across every plan, newest first. Powers the
+    "Plan changes" section on the global /audit page.
+
+    Pagination matches the demo-history endpoint (offset/limit + total)
+    so the UI can use the same pagination footer component.
+    """
+    if limit < 1: limit = 1
+    if limit > 500: limit = 500
+    if offset < 0: offset = 0
+    with session_scope() as s:
+        repo = AuditRepo()
+        rows = repo.list_all(s, limit=limit, offset=offset)
+        total = repo.count_all(s)
+    return GlobalAuditResponse(
+        entries=[
+            GlobalAuditEntry(
+                timestamp=r["created_at"], plan_id=r["plan_id"], actor=r["actor"],
+                action=r["action"], from_state=r["from_state"], to_state=r["to_state"],
+                note=r["note"], url=r["url"], company=r["company"],
+            )
+            for r in rows
+        ],
+        total=total, limit=limit, offset=offset,
+    )
+
+
 @router.get("", response_model=list[PlanSummary])
 def list_plans(limit: int = 50, state: str | None = None) -> list[PlanSummary]:
     """Newest plans first; optionally filter by review state.

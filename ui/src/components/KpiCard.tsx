@@ -1,22 +1,22 @@
 /**
- * KpiCard — the foundational stat tile for the Dashboard, the build
+ * KpiCard, the foundational stat tile for the Dashboard, the build
  * runner, and the pipeline detail page.
  *
  * Three things make it useful beyond a vanilla number-with-label:
  *
- * 1. **Tone-aware** — the value's colour reflects state (success / warning
+ * 1. **Tone-aware**, the value's colour reflects state (success / warning
  *    / danger / accent / muted). The whole card subtly tints to match
  *    when `tone` is non-neutral, so an "Errors: 2" tile reads as a
  *    danger signal at a glance, not just text the eye has to parse.
  *
- * 2. **Drill-downable** — pass `onClick` and the card becomes a button
+ * 2. **Drill-downable**, pass `onClick` and the card becomes a button
  *    with a hover state, focus ring, and an aria-controlled relationship
  *    to a `<DrilldownPanel>`. The pattern: caller renders the card +
  *    panel side-by-side, threads a single `selected` boolean and an
  *    `onToggle` to flip both. Cards with `onClick` get an arrow glyph
  *    on hover to telegraph "more here".
  *
- * 3. **Trend-aware** — `delta` (number) renders as a +/- pill; `trend`
+ * 3. **Trend-aware**, `delta` (number) renders as a +/- pill; `trend`
  *    (sparkline data) renders as a tiny inline sparkline. Either or
  *    both. Both default to undefined (omitted), so the card is dense
  *    when you don't need them.
@@ -117,7 +117,7 @@ export function KpiCard({
     <Wrapper
       {...interactiveProps}
       className={cn(
-        // Base card — glass-ish surface, faint border, subtle tint via
+        // Base card, glass-ish surface, faint border, subtle tint via
         // ::before pseudo-element so the tint sits below content but
         // above the border.
         "relative isolate text-left rounded-xl border transition-all",
@@ -195,7 +195,7 @@ export function KpiCard({
   );
 }
 
-// ─── DeltaPill — colour-coded change indicator ─────────────────────
+// ─── DeltaPill, colour-coded change indicator ─────────────────────
 
 function DeltaPill({ delta, unit }: { delta: number; unit: string }) {
   if (delta === 0) {
@@ -222,7 +222,7 @@ function DeltaPill({ delta, unit }: { delta: number; unit: string }) {
   );
 }
 
-// ─── Sparkline — minimal SVG, no library ───────────────────────────
+// ─── Sparkline, minimal SVG, no library ───────────────────────────
 
 function Sparkline({ data, tone }: { data: number[]; tone: KpiTone }) {
   // Normalize to 0..1 for the viewBox. If all values are equal, draw

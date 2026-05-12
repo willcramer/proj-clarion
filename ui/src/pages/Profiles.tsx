@@ -10,6 +10,7 @@ import {
   type ChatMessage,
 } from "@/lib/api";
 import { usePipeline } from "@/lib/PipelineContext";
+import { AddProfileModal } from "@/components/AddProfileModal";
 import { Card } from "@/components/Card";
 import { Badge } from "@/components/Badge";
 import { Button } from "@/components/Button";
@@ -18,7 +19,7 @@ import { cn } from "@/lib/cn";
 
 // Refetch every 5s while looking at the list so in-flight pipeline
 // placeholders keep their spinner alive and disappear when research
-// lands. Cheap query — DB list of pipelines + profiles.
+// lands. Cheap query, DB list of pipelines + profiles.
 const PROFILES_REFETCH_MS = 5_000;
 
 // ─── List page ────────────────────────────────────────────────────
@@ -31,26 +32,10 @@ export function ProfilesListPage() {
   });
   const navigate = useNavigate();
   const pipeline = usePipeline();
-
-  function addProfile() {
-    // Don't auto-start the build. Capture the URL via prompt and drop
-    // the user into the build form on /new with that URL pre-filled —
-    // they pick the volume preset (smoke / demo / auto / stress) and
-    // days from the form before clicking Build. Auto-starting bypassed
-    // those knobs and produced a default-sized build whether the user
-    // wanted it or not.
-    const url = window.prompt(
-      "Enter the company URL to research (must be in RESEARCH_ALLOWED_HOSTS).\n"
-      + "\n"
-      + "You'll be taken to the build form to pick volume size + days "
-      + "before the build actually starts.",
-      "",
-    );
-    if (!url) return;
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    navigate(`/new?prefill_url=${encodeURIComponent(trimmed)}`);
-  }
+  void pipeline;
+  // First-class modal replaces the old window.prompt, picks up URL +
+  // volume preset and starts the build directly (no /new bounce).
+  const [addOpen, setAddOpen] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -64,12 +49,23 @@ export function ProfilesListPage() {
         <Button
           variant="primary"
           size="sm"
-          onClick={() => void addProfile()}
-          title="Research a new company URL — the resulting CompanyProfile lands here when research completes"
+          onClick={() => setAddOpen(true)}
+          title="Research a new company URL, the resulting CompanyProfile lands here when research completes"
         >
           <Sparkles size={12} /> Add profile
         </Button>
       </div>
+
+      <AddProfileModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSubmitted={() => {
+          setAddOpen(false);
+          // PipelineContext is now non-idle; /new auto-renders the
+          // live PipelineRunView for the just-started build.
+          navigate("/new");
+        }}
+      />
 
       <Card>
         {profiles.isLoading ? (
@@ -118,19 +114,19 @@ export function ProfilesListPage() {
                         p.profile_id
                       )}
                     </td>
-                    <td className="px-4 py-3">{p.company_name ?? <span className="text-[var(--color-text-faint)]">—</span>}</td>
+                    <td className="px-4 py-3">{p.company_name ?? <span className="text-[var(--color-text-faint)]">, </span>}</td>
                     <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] truncate max-w-[280px]">
                       {p.primary_url}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.pain_signal_count}
+                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.pain_signal_count}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.tech_signal_count}
+                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.tech_signal_count}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
                       {p.pending ? (
-                        <span className="text-[var(--color-text-faint)]">—</span>
+                        <span className="text-[var(--color-text-faint)]">, </span>
                       ) : p.synthesized_flag_count > 0 ? (
                         <Badge tone="warning">{p.synthesized_flag_count}</Badge>
                       ) : (
@@ -190,7 +186,7 @@ export function ProfileDetailPage() {
 
   // Pull the source URL out of the profile JSON so a "Build from profile"
   // call can attach it to the new pipeline row. The shape is
-  // CompanyProfile (Pydantic) — typed `unknown` on the wire so we narrow.
+  // CompanyProfile (Pydantic), typed `unknown` on the wire so we narrow.
   function profileUrl(): string | undefined {
     const data = profile.data as { company?: { primary_url?: string } } | undefined;
     return data?.company?.primary_url;
@@ -198,7 +194,7 @@ export function ProfileDetailPage() {
 
   async function buildFromProfile() {
     // Start a NEW build that skips research (we already have this profile)
-    // and goes straight to plan. Smart resume's not the right tool — that's
+    // and goes straight to plan. Smart resume's not the right tool, that's
     // for resuming an existing pipeline. Here the user wants a fresh
     // pipeline pinned to this profile.
     if (typeof pipeline.startFromPhase !== "function") {
@@ -209,7 +205,7 @@ export function ProfileDetailPage() {
     }
     const url = profileUrl();
     if (!url) {
-      window.alert("This profile doesn't have a primary URL — can't start a build.");
+      window.alert("This profile doesn't have a primary URL, can't start a build.");
       return;
     }
     setBuilding(true);
@@ -218,7 +214,7 @@ export function ProfileDetailPage() {
         phase: "plan",
         url,
         profile_id: profileId,
-        // No parent_pipeline_id — this is a fresh build, not a resume.
+        // No parent_pipeline_id, this is a fresh build, not a resume.
       });
       navigate("/new");
     } catch (err) {
@@ -301,7 +297,7 @@ export function ProfileDetailPage() {
           contextId={profileId}
           endpoint="research/extend"
           title="Extend research"
-          subtitle="Ask the agent for more depth on this company. Read-only — suggestions don't auto-save."
+          subtitle="Ask the agent for more depth on this company. Read-only, suggestions don't auto-save."
         />
       </div>
 
@@ -311,7 +307,7 @@ export function ProfileDetailPage() {
         body={
           <div className="space-y-2">
             <p>Removes the profile from Postgres. <strong>Cascades to every plan
-              that references it</strong> — those plans, their KG, events, and audit
+              that references it</strong>, those plans, their KG, events, and audit
               history are deleted too.</p>
             <p className="text-xs text-[var(--color-text-faint)]">
               Mimir/Loki/Tempo time-series for the cascaded plans stay (~30d retention).
@@ -413,7 +409,7 @@ function ProfileSummaryView({
   const geo = data.geographic_footprint ?? {};
   return (
     <div className="space-y-4">
-      {/* Hero — name, domain, classification */}
+      {/* Hero, name, domain, classification */}
       <Card className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -462,7 +458,7 @@ function ProfileSummaryView({
             {data.channels.map((ch, i) => (
               <li key={i} className="text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">{ch.name ?? ch.channel_id ?? "—"}</span>
+                  <span className="font-medium">{ch.name ?? ch.channel_id ?? ", "}</span>
                   {ch.channel_type && (
                     <Badge tone="neutral">{ch.channel_type}</Badge>
                   )}
@@ -485,7 +481,7 @@ function ProfileSummaryView({
             {data.business_entity_candidates.map((e, i) => (
               <li key={i}>
                 <div className="flex items-center gap-2">
-                  <span className="font-medium truncate">{e.name ?? "—"}</span>
+                  <span className="font-medium truncate">{e.name ?? ", "}</span>
                   {e.entity_type && (
                     <Badge tone="neutral">{e.entity_type}</Badge>
                   )}
@@ -515,7 +511,7 @@ function ProfileSummaryView({
         </SectionCard>
       )}
 
-      {/* Pain signals — color-coded by severity */}
+      {/* Pain signals, color-coded by severity */}
       {data.pain_signals && data.pain_signals.length > 0 && (
         <SectionCard title="Pain signals" count={data.pain_signals.length}>
           <ul className="space-y-2.5">
@@ -540,7 +536,7 @@ function ProfileSummaryView({
         </SectionCard>
       )}
 
-      {/* Tech stack signals — group by confidence */}
+      {/* Tech stack signals, group by confidence */}
       {data.tech_stack_signals && data.tech_stack_signals.length > 0 && (
         <SectionCard title="Tech stack" count={data.tech_stack_signals.length}>
           <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-2 text-sm">
@@ -558,7 +554,7 @@ function ProfileSummaryView({
         </SectionCard>
       )}
 
-      {/* Synthesized flags — what the agent guessed without sources. SE
+      {/* Synthesized flags, what the agent guessed without sources. SE
        *  should review these before approving a plan based on the profile. */}
       {data.synthesized_flags && data.synthesized_flags.length > 0 && (
         <SectionCard
@@ -613,7 +609,7 @@ function Field({
         {label}
       </div>
       <div className="text-sm mt-0.5">
-        {value ?? <span className="text-[var(--color-text-faint)]">—</span>}
+        {value ?? <span className="text-[var(--color-text-faint)]">, </span>}
         {extra && <span className="text-[var(--color-text-faint)] ml-1">{extra}</span>}
       </div>
     </div>

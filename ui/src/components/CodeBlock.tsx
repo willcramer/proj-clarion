@@ -1,5 +1,5 @@
 /**
- * CodeBlock — readable monospace surface for logs, JSON, YAML, and any
+ * CodeBlock, readable monospace surface for logs, JSON, YAML, and any
  * non-trivial code snippet shown to the SE.
  *
  * Why bespoke (not Prism / Shiki):
@@ -14,7 +14,7 @@
  * Features:
  *   • Copy-to-clipboard button (changes to a checkmark for 1.5s).
  *   • Line numbers (toggleable for very long blocks).
- *   • Soft-wrap toggle — defaults to off so log alignment is preserved,
+ *   • Soft-wrap toggle, defaults to off so log alignment is preserved,
  *     but a single click wraps long lines without re-rendering. Saved
  *     to localStorage so the SE's preference sticks.
  *   • A11y: code is in a `<pre><code>` so screen readers announce it
@@ -29,7 +29,7 @@ import { cn } from "@/lib/cn";
 export type CodeBlockProps = {
   /** The code to display, as a single string with newlines. */
   code: string;
-  /** Hint for the user (header label) — typically the file extension
+  /** Hint for the user (header label), typically the file extension
    *  or a friendly type name like "JSON" / "Log". Decorative. */
   language?: string;
   /** Show line numbers initially. User can toggle. Default true. */
@@ -56,7 +56,7 @@ export function CodeBlock({
   className,
   noToolbar = false,
 }: CodeBlockProps) {
-  // Persist toggles across sessions — once an SE picks "wrap on" they
+  // Persist toggles across sessions, once an SE picks "wrap on" they
   // tend to want it everywhere; localStorage is the right grain.
   const [wrap, setWrap] = useState<boolean>(() => {
     try {
@@ -91,7 +91,7 @@ export function CodeBlock({
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // Some browsers (e.g. iframe contexts without clipboard perms)
-      // refuse navigator.clipboard. Fall through silently — the user
+      // refuse navigator.clipboard. Fall through silently, the user
       // can select+copy manually as fallback.
     }
   }
@@ -216,7 +216,7 @@ function ToolbarButton({
 // ─── Light-touch tokenization ──────────────────────────────────────
 //
 // Regex-based, single pass. Catches the high-value cases: strings (key
-// + value), numbers, booleans/null. Not a real lexer — fails on weird
+// + value), numbers, booleans/null. Not a real lexer, fails on weird
 // edge cases (JSON5 trailing commas, multi-line strings) but those are
 // rare in our use cases (planner-emitted JSON, structured logs).
 

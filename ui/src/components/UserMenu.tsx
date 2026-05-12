@@ -1,5 +1,5 @@
 /**
- * UserMenu — top-right "signed in as" affordance.
+ * UserMenu, top-right "signed in as" affordance.
  *
  * Surface:
  *   - Avatar circle with initials (from org_slug or user_name)
@@ -12,18 +12,19 @@
  *   - "Not signed in"                (no stack URL)
  *
  * The menu is keyboard-accessible: tab opens focus, Esc closes,
- * arrow keys not implemented yet (could add later — list is short).
+ * arrow keys not implemented yet (could add later, list is short).
  *
  * Sign-out is destructive (wipes `.env` keys), so it ALWAYS goes through
  * a confirmation modal. The user can dismiss without harm.
  */
 import {
   Sun, Moon, Monitor, Settings, LogOut, ChevronDown, ChevronUp,
-  ExternalLink, Sparkles, AlertCircle,
+  ExternalLink, AlertCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { SECONDARY_NAV } from "@/components/Layout";
 import { setupApi, type Identity } from "@/lib/setup-api";
 import { useTheme, type ThemeMode } from "@/lib/ThemeContext";
 import { cn } from "@/lib/cn";
@@ -38,11 +39,11 @@ export function UserMenu() {
 
   useEffect(() => {
     // Best-effort identity fetch. Failures land us in the "Not signed in"
-    // fallback but never throw — the rest of the app keeps working.
+    // fallback but never throw, the rest of the app keeps working.
     setupApi.identity().then(setIdentity).catch(() => setIdentity(null));
   }, []);
 
-  // Close on outside click / Esc — standard popover ergonomics.
+  // Close on outside click / Esc, standard popover ergonomics.
   useEffect(() => {
     if (!open) return;
     function onPointer(e: PointerEvent) {
@@ -76,7 +77,7 @@ export function UserMenu() {
       // a hard reload is the cleanest way to re-trigger the SetupGate.
       window.location.assign("/");
     } catch (e) {
-      // Surface, but don't leave the modal open — the user can retry.
+      // Surface, but don't leave the modal open, the user can retry.
       console.error("Sign out failed:", e);
       setConfirmSignOut(false);
     }
@@ -90,7 +91,7 @@ export function UserMenu() {
           onClick={() => setOpen((o) => !o)}
           aria-haspopup="menu"
           aria-expanded={open}
-          aria-label={`Account menu — ${displayName}`}
+          aria-label={`Account menu, ${displayName}`}
           className={cn(
             "flex items-center gap-2 px-1.5 py-1 rounded-lg",
             "hover:bg-[var(--color-canvas-elev2)] transition-colors",
@@ -140,12 +141,26 @@ export function UserMenu() {
               </div>
             </div>
 
-            {/* Theme toggle — segmented control */}
+            {/* Theme toggle, segmented control */}
             <div className="px-3 py-2 border-b border-[var(--color-border)]">
               <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-faint)] mb-1.5">
                 Theme
               </div>
               <ThemeToggle current={mode} resolved={resolved} onChange={setMode} />
+            </div>
+
+            {/* Secondary nav, Pipelines / Runs / future. Removed from
+                the primary topbar to keep the look uncluttered; they're
+                one click away here. */}
+            <div className="py-1 border-b border-[var(--color-border)]">
+              {SECONDARY_NAV.map(({ to, label, icon: Icon }) => (
+                <MenuItem
+                  key={to}
+                  icon={Icon}
+                  onClick={() => { setOpen(false); navigate(to); }}
+                  label={label}
+                />
+              ))}
             </div>
 
             {/* Actions */}
@@ -156,12 +171,9 @@ export function UserMenu() {
                 label="Settings"
                 sub="Edit tokens · re-upload .env"
               />
-              <MenuItem
-                icon={Sparkles}
-                onClick={() => { setOpen(false); navigate("/new"); }}
-                label="New build"
-                sub="Start a fresh demo from a URL"
-              />
+              {/* "New build" item removed, the Dashboard hero is the
+                  canonical entry point for starting a build now. Keeping
+                  it here was redundant. */}
               {signedIn && (
                 <MenuItem
                   icon={LogOut}
@@ -196,7 +208,7 @@ export function UserMenu() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Avatar — initials in a circle, dot signals signed-in state
+// Avatar, initials in a circle, dot signals signed-in state
 // ──────────────────────────────────────────────────────────────────
 
 function Avatar({
@@ -208,7 +220,7 @@ function Avatar({
       // `user-menu-avatar` is a CSS hook (defined in `index.css`) that
       // paints a teal→sky gradient surface across the circle. The
       // Tailwind `bg-[...]` class below is a fallback if the rule is
-      // ever scoped away — Tailwind wins specificity tie-breakers via
+      // ever scoped away, Tailwind wins specificity tie-breakers via
       // source order, but the gradient is loaded earlier in the cascade.
       className={cn(
         "user-menu-avatar",
@@ -241,7 +253,7 @@ function computeInitials(identity: Identity | null): string {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Theme toggle — three-up segmented control
+// Theme toggle, three-up segmented control
 // ──────────────────────────────────────────────────────────────────
 
 function ThemeToggle({
@@ -289,7 +301,7 @@ function ThemeToggle({
 }
 
 // ──────────────────────────────────────────────────────────────────
-// MenuItem — one row in the dropdown
+// MenuItem, one row in the dropdown
 // ──────────────────────────────────────────────────────────────────
 
 function MenuItem({
@@ -333,7 +345,7 @@ function MenuItem({
 }
 
 // ──────────────────────────────────────────────────────────────────
-// SignOutModal — confirmation before clearing .env keys
+// SignOutModal, confirmation before clearing .env keys
 // ──────────────────────────────────────────────────────────────────
 
 function SignOutModal({
@@ -342,7 +354,7 @@ function SignOutModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  // Trap focus on the modal — Esc / outside click cancels.
+  // Trap focus on the modal, Esc / outside click cancels.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onCancel();
@@ -364,7 +376,7 @@ function SignOutModal({
           <AlertCircle size={18} className="shrink-0 text-[var(--color-danger)] mt-0.5" aria-hidden="true" />
           <div className="flex-1">
             <h2 id="signout-title" className="text-sm font-medium text-[var(--color-text)]">
-              Sign out — this clears your tokens
+              Sign out, this clears your tokens
             </h2>
             <p className="text-xs text-[var(--color-text-muted)] mt-2">
               Clarion will remove these keys from <code>.env</code> on this machine:

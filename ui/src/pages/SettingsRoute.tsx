@@ -1,5 +1,5 @@
 /**
- * SettingsRoute — the `/setup` route reachable from inside the app
+ * SettingsRoute, the `/setup` route reachable from inside the app
  * (via UserMenu → Settings), as opposed to the first-run gate.
  *
  * Reuses <SetupPage> wholesale; the only differences from the gated
@@ -7,7 +7,7 @@
  *   - We fetch the current status ourselves (the gate normally passes
  *     it in via prop).
  *   - On save, instead of unmounting and showing the app, we just
- *     refetch status and stay on the page — the UserMenu's identity
+ *     refetch status and stay on the page, the UserMenu's identity
  *     query will refresh on next mount.
  *
  * Routing-wise this lives inside the Layout so the TopBar stays visible
@@ -42,5 +42,5 @@ export function SettingsRoute() {
       </div>
     );
   }
-  return <SetupPage status={status} onComplete={refresh} />;
+  return <SetupPage status={status} onComplete={refresh} mode="settings" />;
 }

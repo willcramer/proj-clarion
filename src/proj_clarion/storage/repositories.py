@@ -344,6 +344,48 @@ class AuditRepo:
         ).fetchall()
         return [(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows]
 
+    def list_all(
+        self,
+        session: Session,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Audit log across every plan, newest first. Joined with
+        demo_plans → company_profiles for source URL + company so the
+        global Audit page can render a "what happened" row without
+        a second fetch."""
+        rows = session.execute(
+            text("""
+                SELECT al.created_at, al.actor, al.action, al.from_state,
+                       al.to_state, al.note, al.plan_id,
+                       cp.source_url,
+                       cp.profile_json->'company'->>'name' AS company_name
+                FROM plan_audit_log al
+                LEFT JOIN demo_plans dp ON dp.plan_id = al.plan_id
+                LEFT JOIN company_profiles cp ON cp.profile_id = dp.source_profile_id
+                ORDER BY al.created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            {"lim": int(limit), "off": int(offset)},
+        ).fetchall()
+        return [{
+            "created_at":  r[0],
+            "actor":       r[1],
+            "action":      r[2],
+            "from_state":  r[3],
+            "to_state":    r[4],
+            "note":        r[5],
+            "plan_id":     str(r[6]) if r[6] else None,
+            "url":         r[7],
+            "company":     r[8],
+        } for r in rows]
+
+    def count_all(self, session: Session) -> int:
+        """Total count of plan_audit_log rows for the audit pagination."""
+        row = session.execute(text("SELECT COUNT(*) FROM plan_audit_log")).fetchone()
+        return int(row[0]) if row else 0
+
 
 # ============================================================
 # PipelineRepo — full demo-build runs (not individual CLI subprocesses).
@@ -456,11 +498,20 @@ class PipelineRepo:
     def list(
         self, session: Session, *, limit: int = 50, status: str | None = None,
     ) -> list[dict[str, Any]]:
+        # Two correlated subqueries: phases_done (count of completed
+        # phases for this run) and current_phase (whichever phase is
+        # currently running, NULL if none). The pipelines list view
+        # uses these to render a per-row phase progress bar without
+        # an N+1 fetch from the UI.
         sql = """
             SELECT pipeline_id, url, company, days, status, started_at,
                    finished_at, error, profile_id, plan_id, trigger,
                    starting_phase, parent_pipeline_id,
-                   (SELECT COUNT(*) FROM pipeline_events e WHERE e.pipeline_id = p.pipeline_id) AS event_count
+                   (SELECT COUNT(*) FROM pipeline_events e WHERE e.pipeline_id = p.pipeline_id) AS event_count,
+                   (SELECT COUNT(*) FROM pipeline_phases pp
+                    WHERE pp.pipeline_id = p.pipeline_id AND pp.status = 'done') AS phases_done,
+                   (SELECT pp.phase FROM pipeline_phases pp
+                    WHERE pp.pipeline_id = p.pipeline_id AND pp.status = 'running' LIMIT 1) AS current_phase
             FROM pipelines p
         """
         params: dict[str, Any] = {"lim": limit}
@@ -477,6 +528,7 @@ class PipelineRepo:
                 "plan_id": str(r[9]) if r[9] else None,
                 "trigger": r[10], "starting_phase": r[11],
                 "parent_pipeline_id": r[12], "event_count": r[13],
+                "phases_done": int(r[14] or 0), "current_phase": r[15],
             }
             for r in rows
         ]
@@ -717,6 +769,110 @@ class DemoSessionRepo:
         if row is None:
             return None
         return _row_to_dict(row)
+
+    def list_active(self, session: Session) -> list[dict]:
+        """Return every currently-running demo session across all plans.
+
+        "Running" = status in ('starting','live'). Used by the dashboard
+        Live-demo card to surface what's emitting right now without the
+        UI having to fan out per-plan /status polls. Ordered newest-first
+        so the SE sees the freshest session at the top.
+
+        Joins `demo_plans` → `company_profiles` so a single roundtrip
+        gives the UI the source URL alongside the session metadata. The
+        company display name (when present) is pulled from the profile
+        JSON; we fall back to source_url for sessions whose plan has no
+        company field set.
+        """
+        rows = session.execute(text(
+            "SELECT ds.id, ds.plan_id, ds.pid, ds.started_at, ds.expires_at, "
+            "       ds.last_heartbeat_at, ds.status, ds.notes, "
+            "       cp.source_url, "
+            "       cp.profile_json->'company'->>'name' AS company_name "
+            "FROM demo_sessions ds "
+            "JOIN demo_plans dp ON dp.plan_id = ds.plan_id "
+            "JOIN company_profiles cp ON cp.profile_id = dp.source_profile_id "
+            "WHERE ds.status IN ('starting','live') "
+            "ORDER BY ds.started_at DESC"
+        )).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            d = _row_to_dict(r)
+            d["url"] = r[8]
+            d["company"] = r[9]
+            out.append(d)
+        return out
+
+    def list_history(
+        self,
+        session: Session,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        plan_id: UUID | str | None = None,
+    ) -> list[dict]:
+        """Audit history of demo sessions, newest first.
+
+        Returns both terminal rows (status in stopped/expired/crashed)
+        AND in-flight rows (starting/live) so an SE auditing the demo
+        log sees one consistent timeline with the live row at the top.
+
+        `plan_id` optional — when set, scopes to that plan's history
+        (used by the per-plan view on Plans-detail). When omitted,
+        returns sessions across every plan (used by the global
+        `/demos` audit page).
+
+        Joins through `demo_plans` → `company_profiles` so each row
+        carries the source URL + company name for display without an
+        additional fetch.
+
+        `finished_at` is derived from the row state — for in-flight
+        rows it stays NULL. Duration is left for the caller (the API
+        layer adds a derived seconds_active field).
+        """
+        params: dict[str, object] = {"lim": int(limit), "off": int(offset)}
+        scope = ""
+        if plan_id is not None:
+            scope = "AND ds.plan_id = :pid "
+            params["pid"] = str(plan_id)
+        rows = session.execute(text(
+            "SELECT ds.id, ds.plan_id, ds.pid, ds.started_at, ds.expires_at, "
+            "       ds.last_heartbeat_at, ds.status, ds.notes, ds.finished_at, "
+            "       cp.source_url, "
+            "       cp.profile_json->'company'->>'name' AS company_name "
+            "FROM demo_sessions ds "
+            "JOIN demo_plans dp ON dp.plan_id = ds.plan_id "
+            "JOIN company_profiles cp ON cp.profile_id = dp.source_profile_id "
+            f"WHERE 1=1 {scope}"
+            "ORDER BY ds.started_at DESC "
+            "LIMIT :lim OFFSET :off"
+        ), params).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            d = _row_to_dict(r)
+            d["finished_at"] = r[8]
+            d["url"] = r[9]
+            d["company"] = r[10]
+            out.append(d)
+        return out
+
+    def count_history(
+        self,
+        session: Session,
+        *,
+        plan_id: UUID | str | None = None,
+    ) -> int:
+        """Total row count for pagination on the audit page."""
+        params: dict[str, object] = {}
+        scope = ""
+        if plan_id is not None:
+            scope = "WHERE plan_id = :pid"
+            params["pid"] = str(plan_id)
+        row = session.execute(
+            text(f"SELECT COUNT(*) FROM demo_sessions {scope}"),
+            params,
+        ).fetchone()
+        return int(row[0]) if row else 0
 
     def list_expired(self, session: Session) -> list[dict]:
         """Return sessions past expires_at that the sweeper should kill.

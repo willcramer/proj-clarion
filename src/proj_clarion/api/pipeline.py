@@ -338,6 +338,7 @@ async def run_demo_pipeline(
     days: int = 1,
     *,
     starting_phase: str | None = None,
+    stop_after_phase: str | None = None,
     profile_id: str | None = None,
     profile_path: str | None = None,
     plan_id: str | None = None,
@@ -365,6 +366,12 @@ async def run_demo_pipeline(
     remembers which phase last started so we know what to mark failed.
     """
     start_idx = 0 if starting_phase is None else _phase_idx(starting_phase)
+    # Inclusive upper bound. None means "run everything past start_idx".
+    stop_idx = (len(PIPELINE_PHASES) - 1) if stop_after_phase is None else _phase_idx(stop_after_phase)
+    if stop_idx < start_idx:
+        raise ValueError(
+            f"stop_after_phase={stop_after_phase!r} is before starting_phase={starting_phase!r}"
+        )
 
     # Resolve profile_path from profile_id if needed (so callers can
     # pass either form).
@@ -434,14 +441,17 @@ async def run_demo_pipeline(
             yield ev
 
     try:
-        if start_idx <= _phase_idx("research"):
+        # Each phase is gated by BOTH the resume floor (start_idx) and
+        # the early-exit ceiling (stop_idx). When stop_after_phase is
+        # set to "research", we research and bail — no plan/approve/etc.
+        if start_idx <= _phase_idx("research") <= stop_idx:
             async for ev in pipe(_phase_research(url, company)):
                 yield ev
                 if ev.get("event") == "phase" and ev.get("status") == "done":
                     profile_id = ev.get("profile_id") or profile_id
                     profile_path = ev.get("profile_path") or profile_path
 
-        if start_idx <= _phase_idx("plan"):
+        if start_idx <= _phase_idx("plan") <= stop_idx:
             assert profile_path is not None  # validated above
             async for ev in pipe(_phase_plan(
                 profile_path, volume_per_day=volume_per_day,
@@ -450,22 +460,22 @@ async def run_demo_pipeline(
                 if ev.get("event") == "phase" and ev.get("status") == "done":
                     plan_id = ev.get("plan_id") or plan_id
 
-        if start_idx <= _phase_idx("approve"):
+        if start_idx <= _phase_idx("approve") <= stop_idx:
             assert plan_id is not None
             async for ev in pipe(_phase_approve(plan_id)):
                 yield ev
 
-        if start_idx <= _phase_idx("generate"):
+        if start_idx <= _phase_idx("generate") <= stop_idx:
             assert plan_id is not None
             async for ev in pipe(_phase_generate(plan_id, days)):
                 yield ev
 
-        if start_idx <= _phase_idx("provision"):
+        if start_idx <= _phase_idx("provision") <= stop_idx:
             assert plan_id is not None
             async for ev in pipe(_phase_provision(plan_id)):
                 yield ev
 
-        if start_idx <= _phase_idx("kg-publish"):
+        if start_idx <= _phase_idx("kg-publish") <= stop_idx:
             assert plan_id is not None
             async for ev in pipe(_phase_kg_publish(plan_id)):
                 yield ev

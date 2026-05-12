@@ -24,7 +24,7 @@ export function RunsPage() {
           one of <code className="font-mono">generate</code>, <code className="font-mono">provision</code>,
           {" "}<code className="font-mono">kg-publish</code>, or <code className="font-mono">live-tail</code>.
           Each one shells out to <code className="font-mono">proj-clarion</code> just like
-          you'd run from a terminal — same arguments, same logs. This page is where you
+          you'd run from a terminal, same arguments, same logs. This page is where you
           watch what's happening, cancel a long-running one, or check the exit status.
         </p>
         <p className="text-[var(--color-text-faint)] text-xs mt-2 max-w-3xl">

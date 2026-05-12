@@ -1,5 +1,5 @@
 /**
- * DemoSessionCard — Phase-1 "live telemetry" control surface.
+ * DemoSessionCard, Phase-1 "live telemetry" control surface.
  *
  * What it does (and doesn't):
  *  - Starts and stops the KG-entities emitter for one plan, on demand,
@@ -20,8 +20,7 @@
  *                                ▼                       │
  *                             stopped ◄──[expired]───────┘
  *
- * The UI doesn't directly differentiate `expired` vs `stopped` —
- * both render as "no active session" with a "Start new session"
+ * The UI doesn't directly differentiate `expired` vs `stopped`,  * both render as "no active session" with a "Start new session"
  * button. The historical row is in `demo_sessions` if anyone wants
  * to query it.
  */
@@ -257,7 +256,7 @@ function IdleView({
           {busy === "start" ? "Starting…" : "Start demo"}
         </Button>
       </div>
-      {/* Entity cap — optional. Lets the SE narrow the Asserts entity-graph
+      {/* Entity cap, optional. Lets the SE narrow the Asserts entity-graph
           view to a manageable size for a live demo. Picking a preset overrides
           "no cap"; "All" goes back to emitting the full KG. Tier priority:
           business entities + clusters + nodes kept first; pods cut first. */}
@@ -315,7 +314,7 @@ function ActiveView({
     status.health === "starting"
       ? "Spawning emitter… first push in ~30s"
       : status.seconds_since_heartbeat === null
-      ? "—"
+      ? ", "
       : status.seconds_since_heartbeat < 60
       ? `Live · ${Math.round(status.seconds_since_heartbeat)}s ago`
       : `Live · ${Math.round(status.seconds_since_heartbeat / 60)}m ago`;
@@ -380,7 +379,7 @@ function ActiveView({
       </div>
 
       <div className="text-[10px] font-mono text-[var(--color-text-faint)]">
-        session #{status.session_id} · pid {status.pid ?? "—"} · started {new Date(status.started_at).toLocaleTimeString()}
+        session #{status.session_id} · pid {status.pid ?? ", "} · started {new Date(status.started_at).toLocaleTimeString()}
       </div>
     </div>
   );

@@ -46,6 +46,11 @@ class RunPipelineBody(BaseModel):
     # channel count (capped at 5K/day for safe defaults). Use 500 for
     # a smoke build that finishes in a minute.
     volume_per_day: int | None = Field(default=None, ge=100, le=100_000)
+    # Optional cut-off — when set, the orchestrator stops after this
+    # phase completes successfully. Use "research" for the "Just add
+    # profile" flow (research the URL, store the profile, don't plan /
+    # generate / provision). None = run the whole pipeline.
+    stop_after_phase: PhaseName | None = None
 
 
 class RunFromPhaseBody(BaseModel):
@@ -92,6 +97,12 @@ class PipelineSummary(BaseModel):
     # "we used X" notice on the new build card.
     url_normalized_from: str | None = None
     url_normalization_hints: list[str] = Field(default_factory=list)
+    # Phase rollup. The Builds page renders these as a per-row progress
+    # bar (phases_done / 6) plus the active phase name when running.
+    # Populated by PipelineRepo.list(); the inline _summarise() helpers
+    # leave these at defaults until the row is persisted.
+    phases_done: int = 0
+    current_phase: str | None = None
 
 
 class PhaseRow(BaseModel):
@@ -142,6 +153,7 @@ async def run(body: RunPipelineBody = Body(...)) -> PipelineSummary:
     state = start_pipeline(
         normalized.url, body.company, days=body.days,
         volume_per_day=body.volume_per_day,
+        stop_after_phase=body.stop_after_phase,
     )
     summary = _summarise(state)
     if normalized.hints:
@@ -208,19 +220,25 @@ async def run_from_phase(body: RunFromPhaseBody = Body(...)) -> PipelineSummary:
 
 @router.get("", response_model=list[PipelineSummary])
 def list_endpoint() -> list[PipelineSummary]:
-    """Newest first. DB-backed — survives API restart."""
+    """Newest first. DB-backed, survives API restart."""
     pipelines = list_pipelines()
     if not pipelines:
         return []
-    # Pull event counts in one batch so we don't N+1 the DB.
+    # One batch pull from the DB enriches every row with event count,
+    # completed-phase count, and current running phase. The Builds list
+    # uses the phase fields for the inline progress bar.
     with session_scope() as s:
         repo = PipelineRepo()
         rows = repo.list(s, limit=200)
-    counts = {r["pipeline_id"]: r.get("event_count", 0) for r in rows}
-    return [
-        _summarise(p, event_count=counts.get(p.pipeline_id, 0))
-        for p in pipelines
-    ]
+    by_id = {r["pipeline_id"]: r for r in rows}
+    out: list[PipelineSummary] = []
+    for p in pipelines:
+        row = by_id.get(p.pipeline_id, {})
+        summary = _summarise(p, event_count=row.get("event_count", 0))
+        summary.phases_done = int(row.get("phases_done") or 0)
+        summary.current_phase = row.get("current_phase")
+        out.append(summary)
+    return out
 
 
 @router.get("/{pipeline_id}", response_model=PipelineSummary)

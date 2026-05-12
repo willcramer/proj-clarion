@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowLeft, Check, AlertCircle, Play, Trash2, MessageCircle, Code2,
   Stethoscope, CheckCircle2, XCircle, AlertTriangle, MinusCircle, Loader2,
-  Sparkles, Activity, ChevronDown, ChevronRight,
+  Sparkles, Activity, ChevronDown, ChevronRight, FileDown,
 } from "lucide-react";
 
 import {
@@ -20,6 +20,19 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Tabs } from "@/components/Tabs";
 import { JsonEditor } from "@/components/JsonEditor";
 import { DemoSessionCard } from "@/components/DemoSessionCard";
+import { DemoHistorySection } from "@/pages/Audit";
+import { AuditTrailCard } from "@/components/plan/AuditTrailCard";
+import { DashboardsAlertsCard } from "@/components/plan/DashboardsAlertsCard";
+import { IncidentScriptTimeline } from "@/components/plan/IncidentScriptTimeline";
+import { PlanTabs, type PlanTabId } from "@/components/plan/PlanTabs";
+import { ProcessesTable } from "@/components/plan/ProcessesTable";
+import { ReadyToDemoCta } from "@/components/plan/ReadyToDemoCta";
+import { SampleDataSourcesCard } from "@/components/plan/SampleDataSourcesCard";
+import { TelemetryShapeCard } from "@/components/plan/TelemetryShapeCard";
+import {
+  deriveDashboardsAndAlerts, deriveIncidentStops, deriveProcesses,
+  deriveSampleSources, deriveTelemetryShape,
+} from "@/lib/plan-derivations";
 import { AgentChatPanel } from "@/pages/Profiles";
 import { cn } from "@/lib/cn";
 
@@ -37,12 +50,18 @@ export function PlansListPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Plans</h1>
-        <p className="text-[var(--color-text-muted)] mt-1 text-sm">
-          DemoPlans for SE review. Click in to inspect, approve, or refine.
+      <header>
+        <div className="text-[11px] font-mono uppercase tracking-[0.08em] text-[var(--color-text-faint)]">
+          Plans
+        </div>
+        <h1 className="mt-2 text-[28px] font-semibold tracking-tight leading-tight text-[var(--color-text)]">
+          Every plan, ready to review.
+        </h1>
+        <p className="text-[var(--color-text-muted)] mt-1 text-sm max-w-2xl">
+          DemoPlans the planner produced. Click in to inspect, approve, refine, or
+          start a live demo.
         </p>
-      </div>
+      </header>
       <Card>
         {plans.isLoading ? (
           <div className="p-8 text-center text-[var(--color-text-faint)]">Loading…</div>
@@ -95,16 +114,16 @@ export function PlansListPage() {
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.process_count}
+                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.process_count}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.kg_node_count}
+                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.kg_node_count}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.alert_count}
+                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.alert_count}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.dashboard_count}
+                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.dashboard_count}
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-[var(--color-text-muted)]">
                       {new Date(p.updated_at).toLocaleString()}
@@ -168,36 +187,168 @@ export function PlanDetailPage() {
       ) : !plan.data ? (
         <div className="text-[var(--color-danger)]">Plan not found.</div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <div className="space-y-6">
-            <PlanHeader plan={plan.data} />
-            {/* Demo session controls — only meaningful once the plan is
-                approved (= the KG rules were pushed to Cloud). Hiding for
-                draft/in-review plans avoids confusing users who haven't
-                done the initial kg-publish yet (Cloud entities don't
-                materialize from a single emitter alone — the rule push
-                in `kg-publish` is what defines them). */}
-            {plan.data.review_state === "approved_for_provision" && (
-              <DemoSessionCard planId={plan.data.plan_id} />
-            )}
-            <EntityTypesPanel plan={plan.data} />
-            <PlanTree plan={plan.data} />
-            <PlanActions planId={plan.data.plan_id} state={plan.data.review_state} />
-            <HealthPanel planId={plan.data.plan_id} />
-            <AuditPanel rows={audit.data ?? []} />
-          </div>
-          <RefineColumn planId={plan.data.plan_id} planJson={plan.data} />
-        </div>
+        <PlanDetailBody plan={plan.data} audit={audit.data ?? []} />
       )}
     </div>
   );
 }
 
+// ──────────────────────────────────────────────────────────────────
+// PlanDetailBody: header → CDD plan-grid (KG + live demo + stats) →
+// sticky tab strip → 5 deep sections → footer CTA → editor row.
+// Split out of PlanDetailPage so the body's helpers + memos don't
+// have to deal with `plan.isLoading` / null-checking the whole way
+// down.
+// ──────────────────────────────────────────────────────────────────
+
+function PlanDetailBody({
+  plan, audit,
+}: {
+  plan: PlanDoc;
+  audit: Array<{
+    timestamp: string;
+    actor: string;
+    action: string;
+    from_state: string | null;
+    to_state: string | null;
+    note: string | null;
+  }>;
+}) {
+  const processes = useMemo(() => deriveProcesses(plan), [plan]);
+  const dashboards = useMemo(() => deriveDashboardsAndAlerts(plan), [plan]);
+  const telemetry = useMemo(() => deriveTelemetryShape(plan), [plan]);
+  const incidentStops = useMemo(() => deriveIncidentStops(plan), [plan]);
+  const sampleSources = useMemo(() => deriveSampleSources(plan), [plan]);
+  const [activeTab, setActiveTab] = useState<PlanTabId>("processes");
+
+  const isApproved =
+    plan.review_state === "approved_for_provision"
+    || plan.review_state === "provisioned";
+
+  function exportPlanJson() {
+    const blob = new Blob([JSON.stringify(plan, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${plan.plan_id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function jumpToDemoSession() {
+    document.getElementById("plan-demo-session")?.scrollIntoView({
+      behavior: "smooth", block: "start",
+    });
+  }
+
+  return (
+    <div className="space-y-6">
+      <PlanHeader plan={plan} />
+
+      {/* CDD plan-detail body: knowledge graph on the left (1.4fr),
+          live demo session + plan contents stats on the right (1fr).
+          Collapses to single column below xl. `items-start` keeps
+          each column at its natural height. */}
+      <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr] items-start">
+        <KnowledgeGraphPanel plan={plan} />
+        <div className="space-y-5">
+          {isApproved && (
+            <div id="plan-demo-session">
+              <DemoSessionCard planId={plan.plan_id} />
+            </div>
+          )}
+          <PlanContentsStats plan={plan} />
+        </div>
+      </div>
+
+      {/* Controlled tab strip + a single panel at a time. Replaces an
+          earlier anchor-scroll prototype that turned the page into a
+          long ribbon; now each section's content is swapped in place
+          so the page stays compact and the SE can sweep through the
+          plan without scroll fatigue. */}
+      <PlanTabs
+        tabs={[
+          { id: "processes",  label: "Processes & SLOs",  count: processes.length },
+          { id: "dashboards", label: "Dashboards & alerts", count: dashboards.length },
+          { id: "telemetry",  label: "Telemetry shape" },
+          { id: "incident",   label: "Incident script", count: incidentStops.length },
+          { id: "audit",      label: "Audit & data" },
+        ]}
+        activeId={activeTab}
+        onChange={(id) => setActiveTab(id as PlanTabId)}
+      />
+
+      <div role="tabpanel" aria-label={activeTab}>
+        {activeTab === "processes" && (
+          <ProcessesTable rows={processes} />
+        )}
+        {activeTab === "dashboards" && (
+          <DashboardsAlertsCard items={dashboards} showAllInitially />
+        )}
+        {activeTab === "telemetry" && (
+          <TelemetryShapeCard shape={telemetry} />
+        )}
+        {activeTab === "incident" && (
+          <IncidentScriptTimeline
+            stops={incidentStops}
+            totalMinutes={plan.incident_script?.total_duration_minutes ?? 0}
+          />
+        )}
+        {activeTab === "audit" && (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+            <AuditTrailCard entries={audit} />
+            <SampleDataSourcesCard sources={sampleSources} />
+          </div>
+        )}
+      </div>
+
+      <ReadyToDemoCta
+        ready={isApproved}
+        onStartDemo={jumpToDemoSession}
+        onExportPlan={exportPlanJson}
+      />
+
+      {/* Editor row, behind a disclosure so power-user surfaces stay
+          reachable without padding the default scroll. Defaults to
+          closed; the chevron remembers state per page session. */}
+      <details className="group">
+        <summary
+          className={cn(
+            "list-none cursor-pointer select-none",
+            "flex items-center gap-2 px-4 py-3 rounded-md border",
+            "bg-[var(--color-canvas-elev1)] border-[var(--color-border)]",
+            "hover:border-[var(--color-border-strong)] transition-colors",
+            "text-sm font-medium text-[var(--color-text)]",
+          )}
+        >
+          <ChevronRight
+            size={14}
+            className="text-[var(--color-text-faint)] transition-transform group-open:rotate-90"
+          />
+          <span className="flex-1">Composition, actions, health &amp; refine</span>
+          <span className="text-[11px] font-mono text-[var(--color-text-faint)]">power user</span>
+        </summary>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start mt-4">
+          <div className="space-y-5">
+            <PlanTree plan={plan} />
+            <PlanActions planId={plan.plan_id} state={plan.review_state} />
+            <HealthPanel planId={plan.plan_id} />
+            <DemoHistorySection planId={plan.plan_id} />
+            <AuditPanel rows={audit} />
+          </div>
+          <RefineColumn planId={plan.plan_id} planJson={plan} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+
 /** Right column on Plan detail: tabs between agent chat (narrative
  *  refinement) and a JSON editor (direct schema-validated edits).
  *
  *  Before this component existed, the right column was a single
- *  AgentChatPanel — useful for "what should I change" but read-only.
+ *  AgentChatPanel, useful for "what should I change" but read-only.
  *  Now SEs can either talk to the agent OR open the editor and apply
  *  changes themselves. */
 function RefineColumn({
@@ -234,7 +385,7 @@ function RefineColumn({
           contextId={planId}
           endpoint="plan/refine"
           title="Refine plan"
-          subtitle="Ask the planner to reconsider a process, alert, or incident. Suggestions are narrative — switch to the JSON tab to apply changes."
+          subtitle="Ask the planner to reconsider a process, alert, or incident. Suggestions are narrative, switch to the JSON tab to apply changes."
         />
       ) : (
         <JsonEditor
@@ -248,18 +399,178 @@ function RefineColumn({
   );
 }
 
+/** Human-readable mapping for review_state, used in the page eyebrow.
+ *  Same five states the backend emits, written as a phrase the SE
+ *  recognises without translation. */
+const REVIEW_STATE_LABEL: Record<string, string> = {
+  draft:                  "draft",
+  se_reviewed:            "in review",
+  approved_for_provision: "approved for provision",
+  provisioned:            "provisioned",
+  torn_down:              "torn down",
+};
+
+/** A short, action-oriented title for the H1. Picks a state-relevant
+ *  word to apply the accent→signal gradient to, the same "display"
+ *  treatment the v1 design canvas uses for the marquee moment on
+ *  every page. */
+function planTitle(state: string): { lead: string; display: string } {
+  switch (state) {
+    case "provisioned":            return { lead: "Demo is",      display: "live" };
+    case "approved_for_provision": return { lead: "Ready to",      display: "demo" };
+    case "se_reviewed":            return { lead: "Plan is in",   display: "review" };
+    case "torn_down":              return { lead: "Demo was",      display: "torn down" };
+    default:                       return { lead: "Demo plan",     display: "draft" };
+  }
+}
+
 function PlanHeader({ plan }: { plan: PlanDoc }) {
+  const t = planTitle(plan.review_state);
+  const isApproved =
+    plan.review_state === "approved_for_provision"
+    || plan.review_state === "provisioned";
+
+  function exportPlan() {
+    // Drop the raw plan_json into the browser as a download. Cheap,
+    // no API addition needed; the SE can hand the file to a colleague
+    // or attach to a Slack thread.
+    const blob = new Blob([JSON.stringify(plan, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${plan.plan_id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function scrollToDemo() {
+    document.getElementById("plan-demo-session")?.scrollIntoView({
+      behavior: "smooth", block: "start",
+    });
+  }
+
+  return (
+    <div className="flex items-start gap-6 flex-wrap">
+      <div className="flex-1 min-w-[280px]">
+        <div className="text-[11px] font-mono uppercase tracking-[0.08em] text-[var(--color-text-faint)]">
+          Plan, {REVIEW_STATE_LABEL[plan.review_state] ?? plan.review_state}
+          <span className="ml-2 text-[var(--color-text-faint)]">
+            {plan.plan_id.slice(0, 8)}
+          </span>
+        </div>
+        <h1 className="mt-1 text-[32px] font-medium tracking-tight leading-tight text-[var(--color-text)]">
+          {t.lead} <span className="h1-display">{t.display}</span>.
+        </h1>
+        <p className="mt-3 text-[var(--color-text-muted)] text-[15px] leading-relaxed max-w-2xl">
+          {plan.narrative}
+        </p>
+        <div className="mt-3 text-[11px] font-mono text-[var(--color-text-faint)]">
+          source profile <span className="text-[var(--color-text-muted)]">{plan.source_profile_id}</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={exportPlan}
+          title="Download the plan_json as a file."
+        >
+          <FileDown size={12} /> Export plan
+        </Button>
+        {isApproved && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={scrollToDemo}
+            title="Jump to the live demo session controls below."
+          >
+            <Play size={12} /> Start demo
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Knowledge-graph card. CDD header (title + node/edge count) plus the
+ *  existing tier-breakdown body. The fancy SVG node-link diagram from
+ *  the design canvas is intentionally left out for now; the per-tier
+ *  entity-type list still tells the SE what the plan models. */
+function KnowledgeGraphPanel({ plan }: { plan: PlanDoc }) {
+  const nodes = plan.knowledge_graph.nodes ?? [];
+  const edges = plan.knowledge_graph.edges ?? [];
   return (
     <Card className="p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-2">
-            <Badge tone={reviewStateTone(plan.review_state)}>{plan.review_state}</Badge>
-            <span className="font-mono text-xs text-[var(--color-text-muted)]">{plan.plan_id.slice(0, 8)}</span>
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <h3 className="text-sm font-medium text-[var(--color-text)] m-0">
+          Knowledge graph
+        </h3>
+        <span className="font-mono text-[11px] text-[var(--color-text-faint)] tabular-nums">
+          {nodes.length} nodes · {edges.length} edges
+        </span>
+      </div>
+      <EntityTypesBody plan={plan} />
+      {/* Legend mirrors the CDD plan-detail swatch row: business teal,
+          agentic blue, technical sky. */}
+      <div className="flex flex-wrap gap-3 mt-4 text-[11px] text-[var(--color-text-muted)]">
+        <span className="inline-flex items-center gap-1.5">
+          <i className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-accent)" }} />
+          Business
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <i className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-info)" }} />
+          Agentic
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <i className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "var(--color-signal)" }} />
+          Technical
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+/** Snapshot of what's IN the plan: the four counts SE eyes look for
+ *  before clicking Start demo. Mirrors the CDD plan-detail "Plan
+ *  contents" card (Processes / Dashboards / Alerts / Incident script
+ *  duration). All numbers come from the plan_json directly. */
+function PlanContentsStats({ plan }: { plan: PlanDoc }) {
+  const stats: { label: string; value: string; sub?: string }[] = [
+    {
+      label: "Processes",
+      value: plan.business_process_models.length.toLocaleString(),
+    },
+    {
+      label: "Dashboards",
+      value: plan.dashboard_specs.length.toLocaleString(),
+    },
+    {
+      label: "Alerts",
+      value: plan.alert_specs.length.toLocaleString(),
+    },
+    {
+      label: "Incident script",
+      value: plan.incident_script?.total_duration_minutes
+        ? plan.incident_script.total_duration_minutes.toLocaleString()
+        : "—",
+      sub: plan.incident_script?.total_duration_minutes ? "min" : undefined,
+    },
+  ];
+  return (
+    <Card className="p-5">
+      <h3 className="text-sm font-medium text-[var(--color-text)] m-0 mb-3">Plan contents</h3>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {stats.map((s) => (
+          <div key={s.label}>
+            <div className="text-[10px] font-mono uppercase tracking-[0.06em] text-[var(--color-text-faint)]">
+              {s.label}
+            </div>
+            <div className="mt-1 text-[22px] font-medium tabular-nums text-[var(--color-text)]">
+              {s.value}
+              {s.sub && <span className="text-[14px] text-[var(--color-text-faint)] ml-1">{s.sub}</span>}
+            </div>
           </div>
-          <div className="text-sm text-[var(--color-text-muted)] mb-1">{plan.source_profile_id}</div>
-          <p className="text-sm leading-relaxed">{plan.narrative}</p>
-        </div>
+        ))}
       </div>
     </Card>
   );
@@ -270,9 +581,21 @@ function PlanHeader({ plan }: { plan: PlanDoc }) {
  *  plan lands so the SE can verify the planner picked vertical-fit
  *  subtypes (no "store" on BlueSky Airlines etc.) without diving into
  *  the raw JSON. */
-function EntityTypesPanel({ plan }: { plan: PlanDoc }) {
+/** Tier-grouped entity-type chip body. Extracted from the old
+ *  EntityTypesPanel so KnowledgeGraphPanel can compose it inside its
+ *  own card header without nesting Card-in-Card.
+ *
+ *  Returns null if the plan has no nodes (planner ran but produced
+ *  zero entities, rare but possible for early failures). */
+function EntityTypesBody({ plan }: { plan: PlanDoc }) {
   const nodes = plan.knowledge_graph.nodes ?? [];
-  if (nodes.length === 0) return null;
+  if (nodes.length === 0) {
+    return (
+      <div className="text-xs text-[var(--color-text-faint)] italic">
+        No entities in this plan yet.
+      </div>
+    );
+  }
 
   // Group node labels by (tier, subtype). Tier comes from node_type.
   // Examples: subtype=region, store, channel, business_unit, ... (business)
@@ -295,66 +618,50 @@ function EntityTypesPanel({ plan }: { plan: PlanDoc }) {
     groups[tier][subtype].push(n.label);
   }
 
-  // Hide tiers that have no entries.
   const tiers = (Object.keys(groups) as string[]).filter(t => Object.keys(groups[t]).length > 0);
 
   return (
-    <Card className="p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
-          Entity types
-        </h2>
-        <div className="text-xs text-[var(--color-text-faint)] font-mono">
-          {nodes.length} total nodes
-        </div>
-      </div>
-      <div className="space-y-4">
-        {tiers.map(tier => {
-          const subtypes = groups[tier];
-          const subtypeKeys = Object.keys(subtypes).sort();
-          return (
-            <div key={tier}>
-              <div className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider mb-2">
-                {tier}
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {subtypeKeys.map(st => {
-                  const labels = subtypes[st];
-                  return (
-                    <div
-                      key={st}
-                      className="group relative inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-[var(--color-border)] bg-white/[0.02] hover:bg-white/[0.05] hover:border-[var(--color-border-strong)] transition-colors text-xs"
-                      title={labels.slice(0, 12).join(", ") + (labels.length > 12 ? ` … +${labels.length - 12} more` : "")}
-                    >
-                      <span className="font-medium">{st}</span>
-                      <span className="text-[var(--color-text-faint)] font-mono tabular-nums">
-                        {labels.length}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+    <div className="space-y-4">
+      {tiers.map(tier => {
+        const subtypes = groups[tier];
+        const subtypeKeys = Object.keys(subtypes).sort();
+        return (
+          <div key={tier}>
+            <div className="text-[10px] font-mono text-[var(--color-text-faint)] uppercase tracking-wider mb-2">
+              {tier}
             </div>
-          );
-        })}
-      </div>
-      <p className="text-xs text-[var(--color-text-faint)] mt-3 leading-relaxed">
-        Hover any chip to see the names. Subtype values come from the
-        plan's knowledge graph; for non-retail verticals you should NOT
-        see <code className="font-mono">store</code> or{" "}
-        <code className="font-mono">fulfillment_center</code>.
-      </p>
-    </Card>
+            <div className="flex flex-wrap gap-1.5">
+              {subtypeKeys.map(st => {
+                const labels = subtypes[st];
+                return (
+                  <div
+                    key={st}
+                    className="group relative inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-[var(--color-border)] bg-white/[0.02] hover:bg-white/[0.05] hover:border-[var(--color-border-strong)] transition-colors text-xs"
+                    title={labels.slice(0, 12).join(", ") + (labels.length > 12 ? ` … +${labels.length - 12} more` : "")}
+                  >
+                    <span className="font-medium">{st}</span>
+                    <span className="text-[var(--color-text-faint)] font-mono tabular-nums">
+                      {labels.length}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
+
 
 
 function PlanTree({ plan }: { plan: PlanDoc }) {
   return (
     <Card className="p-5">
-      <h2 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-3">
+      <h3 className="text-sm font-medium text-[var(--color-text)] m-0 mb-3">
         Composition
-      </h2>
+      </h3>
       <div className="grid grid-cols-2 gap-3 text-sm">
         <Stat label="Processes" value={plan.business_process_models.length} />
         <Stat label="KG nodes" value={plan.knowledge_graph.nodes.length} />
@@ -400,8 +707,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
   const [building, setBuilding] = useState(false);
 
   // Find pipelines previously associated with this plan so we can offer
-  // "View latest build" when one exists. Refetched on a slow cadence —
-  // the relevant pipeline IDs only change when this user kicks off a
+  // "View latest build" when one exists. Refetched on a slow cadence,   // the relevant pipeline IDs only change when this user kicks off a
   // new build, which they'd notice anyway.
   const pipelinesQ = useQuery({
     queryKey: ["pipelines"],
@@ -442,8 +748,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
   });
 
   // Start a new pipeline using THIS plan as the input. Skips research
-  // AND plan because the plan is already in DB and approved/ready —
-  // start at `approve` so the orchestrator records the audit transition,
+  // AND plan because the plan is already in DB and approved/ready,   // start at `approve` so the orchestrator records the audit transition,
   // then runs generate → provision → kg-publish.
   async function newBuildFromPlan() {
     if (typeof pipeline.startFromPhase !== "function") {
@@ -454,7 +759,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
     }
     // Inherit URL/company from the latest pipeline if we have one.
     // Otherwise fall back to a placeholder; the build still runs because
-    // research is skipped — the URL is just metadata for the pipelines row.
+    // research is skipped, the URL is just metadata for the pipelines row.
     const url = latestPipeline?.url
       ?? `plan://${planId.slice(0, 8)}`;
     const company = latestPipeline?.company ?? undefined;
@@ -465,7 +770,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
         url,
         company,
         plan_id: planId,
-        // No parent_pipeline_id — this is a fresh build, not a resume.
+        // No parent_pipeline_id, this is a fresh build, not a resume.
       });
       navigate("/new");
     } catch (err) {
@@ -500,9 +805,9 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
 
   return (
     <Card className="p-5 space-y-4">
-      <h2 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+      <h3 className="text-sm font-medium text-[var(--color-text)] m-0">
         Actions
-      </h2>
+      </h3>
 
       {state === "draft" && (
         <div className="space-y-2">
@@ -524,7 +829,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
         </div>
       )}
 
-      {/* Primary build CTAs — the modern path. View previous build OR
+      {/* Primary build CTAs, the modern path. View previous build OR
        *  start a new one from this plan. Granular phase runs are tucked
        *  into the Advanced disclosure below. */}
       <div className="flex flex-wrap gap-2">
@@ -548,7 +853,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
           onClick={() => void newBuildFromPlan()}
           title={
             planReadyForBuild
-              ? "Start a new pipeline that skips research AND plan (uses this plan) — runs approve → generate → provision → kg-publish."
+              ? "Start a new pipeline that skips research AND plan (uses this plan), runs approve → generate → provision → kg-publish."
               : "Approve the plan first, then this becomes available."
           }
         >
@@ -567,7 +872,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
           className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1"
         >
           {showAdvanced ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          Advanced — run individual CLI phases
+          Advanced, run individual CLI phases
         </button>
         {showAdvanced && (
           <div className="mt-3 flex flex-wrap gap-2">
@@ -631,7 +936,7 @@ function PlanActions({ planId, state }: { planId: string; state: string }) {
 }
 
 /** Post-emit validation panel. Click to run; reports per-check status
- *  inline with a "fix" hint. The agent isn't trusted by default — this
+ *  inline with a "fix" hint. The agent isn't trusted by default, this
  *  is the verification step that gates "is the data really good". */
 function HealthPanel({ planId }: { planId: string }) {
   const [report, setReport] = useState<HealthReport | null>(null);
@@ -645,19 +950,33 @@ function HealthPanel({ planId }: { planId: string }) {
 
   return (
     <Card className="p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider flex items-center gap-2">
-            <Stethoscope size={14} /> KG health
-          </h2>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-[var(--color-text)] m-0 flex items-center gap-2">
+            <Stethoscope size={14} className="text-[var(--color-text-faint)]" /> KG health
+          </h3>
           <p className="text-xs text-[var(--color-text-faint)] mt-1">
             Validates this plan's metrics + entities in Cloud against every
             invariant we know about (asserts scope, customer label, Pod node,
             Store fan-out, affinity metrics, entity-count parity).
           </p>
         </div>
-        <Button size="sm" onClick={() => runMut.mutate()} disabled={runMut.isPending}>
-          {runMut.isPending ? "Running…" : "Run check"}
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => runMut.mutate()}
+          disabled={runMut.isPending}
+          className="shrink-0 whitespace-nowrap"
+        >
+          {runMut.isPending ? (
+            <>
+              <Loader2 size={12} className="animate-spin" /> Running&hellip;
+            </>
+          ) : (
+            <>
+              <Stethoscope size={12} /> Run check
+            </>
+          )}
         </Button>
       </div>
 
@@ -717,7 +1036,7 @@ function HealthPanel({ planId }: { planId: string }) {
  *  pipeline phase audit entries embed Grafana Cloud URLs in their note
  *  bodies for exactly this purpose. */
 function LinkifiedNote({ text }: { text: string }) {
-  // Conservative URL detector — matches http(s) URLs ending at whitespace
+  // Conservative URL detector, matches http(s) URLs ending at whitespace
   // or sentence punctuation. Won't break on URLs with query strings.
   const parts = text.split(/(\bhttps?:\/\/[^\s)]+)/g);
   return (
@@ -752,9 +1071,9 @@ function AuditPanel({ rows }: { rows: Array<{ timestamp: string; actor: string; 
   if (rows.length === 0) return null;
   return (
     <Card className="p-5">
-      <h2 className="text-sm font-medium text-[var(--color-text-muted)] uppercase tracking-wider mb-3">
+      <h3 className="text-sm font-medium text-[var(--color-text)] m-0 mb-3">
         Audit history
-      </h2>
+      </h3>
       <div className="space-y-3">
         {rows.map((r, i) => {
           // Cloud-asset audit actions get a small accent dot so they're

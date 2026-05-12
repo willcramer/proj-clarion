@@ -2,15 +2,15 @@
  * Theme system.
  *
  * Three modes:
- *   - `light`   — explicit; user picked light
- *   - `dark`    — explicit; user picked dark
- *   - `system`  — follow OS `prefers-color-scheme`; flips automatically
+ *   - `light`, explicit; user picked light
+ *   - `dark`, explicit; user picked dark
+ *   - `system`, follow OS `prefers-color-scheme`; flips automatically
  *                 when the OS preference changes
  *
  * Storage: `localStorage["clarion.theme"]` holds the user's PREFERENCE
  * (light/dark/system), not the RESOLVED value. The resolved value is
  * always written to `<html data-theme=...>` as either "light" or
- * "dark" — the CSS in index.css branches on that attribute.
+ * "dark", the CSS in index.css branches on that attribute.
  *
  * The boot script in `index.html` sets `data-theme` synchronously
  * before React paints, so refresh / cold-load never flashes the wrong
@@ -36,7 +36,7 @@ function readStored(): ThemeMode {
     const v = localStorage.getItem(STORAGE_KEY);
     if (v === "light" || v === "dark" || v === "system") return v;
   } catch {
-    /* localStorage unavailable in private mode — fall through */
+    /* localStorage unavailable in private mode, fall through */
   }
   return "system";
 }
@@ -66,7 +66,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(() => readStored());
   // `resolved` is derived from mode + (when mode='system') the OS pref.
   // We keep it in state so the React tree re-renders when the OS pref
-  // changes mid-session (rare but real — laptop lid close, screen-share
+  // changes mid-session (rare but real, laptop lid close, screen-share
   // mode, etc.).
   const [resolved, setResolved] = useState<ResolvedTheme>(() =>
     mode === "system" ? resolveSystem() : mode,

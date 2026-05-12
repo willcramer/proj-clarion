@@ -11,20 +11,19 @@
      mark, primary buttons, focus rings, and the "active phase" state
      all use this single color so the eye learns where to look.
    - **Grafana orange** (`--color-grafana`) = "live in Cloud". Used
-     ONLY for things that materially exist on the SE's tenant —
-     dashboards pushed, entities emitting, live-tail open. Reserved so
+     ONLY for things that materially exist on the SE's tenant,      dashboards pushed, entities emitting, live-tail open. Reserved so
      it stays meaningful.
 
    All semantic colors meet WCAG 2.1 AA contrast on `--color-canvas`
    for both regular text (4.5:1) and UI elements (3:1).
 */
 
-/* ── Token system — Proj-Clarion redesign v2 (Signal direction) ──
+/* ── Token system, Proj-Clarion redesign v2 (Signal direction) ──
    Source: claude_design_assets/clarion-redesign-v2/tokens.css.
    Pasted under @theme so Tailwind v4 picks them up as utility classes;
    light theme overrides happen below via [data-theme="light"]. */
 @theme {
-  /* Canvas surfaces — slate-navy, cooler than near-black */
+  /* Canvas surfaces, slate-navy, cooler than near-black */
   --color-canvas:        #0a0e14;
   --color-canvas-elev1:  #131820;
   --color-canvas-elev2:  #1c232d;
@@ -39,7 +38,7 @@
   --color-text-muted:    #9aa3b2;
   --color-text-faint:    #6b7385;
 
-  /* Accent (teal — Signal direction). Primary actions, focus rings,
+  /* Accent (teal, Signal direction). Primary actions, focus rings,
      active states, the brand mark. */
   --color-accent:        #2dd4bf;
   --color-accent-hover:  #5eead4;
@@ -48,16 +47,16 @@
   --color-accent-border: rgba(45, 212, 191, 0.42);
   --color-on-accent:     #04211e;
 
-  /* "Live" — telemetry-flowing state, distinct from success.
+  /* "Live", telemetry-flowing state, distinct from success.
      Demo emitter pulse / "events flowing" cue. */
   --color-live:          #6ee7b7;
   --color-live-bg:       rgba(110, 231, 183, 0.12);
 
-  /* Signal — sky-300 secondary tier (sparkline trails, secondary callouts). */
+  /* Signal, sky-300 secondary tier (sparkline trails, secondary callouts). */
   --color-signal:        #7dd3fc;
   --color-signal-bg:     rgba(125, 211, 252, 0.12);
 
-  /* Grafana brand. Reserved — only for "live in cloud" cues. Never on idle UI. */
+  /* Grafana brand. Reserved, only for "live in cloud" cues. Never on idle UI. */
   --color-grafana:       #FF8833;
   --color-grafana-bg:    rgba(255, 136, 51, 0.14);
   --color-grafana-border: rgba(255, 136, 51, 0.42);
@@ -72,12 +71,12 @@
   --color-info:          #60a5fa;
   --color-info-bg:       rgba(96, 165, 250, 0.13);
 
-  /* Layout primitives — tighter than v1 (10px → 14px → 6px not 14/20/8) */
+  /* Layout primitives, tighter than v1 (10px → 14px → 6px not 14/20/8) */
   --radius-sm: 6px;
   --radius:    10px;
   --radius-lg: 16px;
 
-  /* Shadows — darker on dark theme so layered cards read clearly */
+  /* Shadows, darker on dark theme so layered cards read clearly */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 6px 18px -6px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
@@ -118,7 +117,7 @@
   --color-accent-border: rgba(13, 148, 136, 0.30);
   --color-on-accent:     #ffffff;
 
-  /* Live / Signal — darker for AA on light canvas. */
+  /* Live / Signal, darker for AA on light canvas. */
   --color-live:          #047857;
   --color-live-bg:       rgba(4, 120, 87, 0.10);
   --color-signal:        #075985;
@@ -150,7 +149,7 @@
   color-scheme: light;
 }
 :root {
-  /* Inter character variants — improves legibility at small sizes
+  /* Inter character variants, improves legibility at small sizes
      (cv02 enables single-storey 'a', cv11 enables a clearer 1/I distinction).
      Critical for code-adjacent tabular data which Clarion shows a lot of. */
   font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01", "ss03";
@@ -179,7 +178,7 @@ html, body, #root {
   color: var(--color-text);
 }
 
-/* Subtle background ambience — radial wash from upper-left, fades out.
+/* Subtle background ambience, radial wash from upper-left, fades out.
    Matches the Signal direction "halo": teal from the upper-right + sky
    from the lower-left. Gives the canvas implied depth without
    distracting from cards on top. */
@@ -199,7 +198,7 @@ body {
   background-attachment: fixed;
 }
 
-/* Glass card primitive — reduce blur on mobile for perf */
+/* Glass card primitive, reduce blur on mobile for perf */
 .glass {
   background: linear-gradient(180deg,
     rgba(255, 255, 255, 0.03) 0%,
@@ -212,7 +211,7 @@ body {
   .glass { backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
 }
 
-/* Code block / inline code — readable, not alarming.
+/* Code block / inline code, readable, not alarming.
    `code` is for inline snippets in prose; `pre code` is for blocks
    (the CodeBlock component drives that). */
 code {
@@ -228,11 +227,11 @@ pre code {
   background: transparent;
   padding: 0;
   border: 0;
-  font-size: 0.8125rem;  /* 13px — comfortable for dense logs */
+  font-size: 0.8125rem;  /* 13px, comfortable for dense logs */
   line-height: 1.55;
 }
 
-/* Custom scrollbar — slim, themed. Thicker hover state for
+/* Custom scrollbar, slim, themed. Thicker hover state for
    discoverability (some users don't realize it's draggable). */
 ::-webkit-scrollbar {
   width: 10px;
@@ -277,7 +276,7 @@ pre code {
   color: var(--color-text);
 }
 
-/* UserMenu avatar — gradient surface. Defined here (not as a Tailwind
+/* UserMenu avatar, gradient surface. Defined here (not as a Tailwind
    class on the component) so the brand gradient is centralised and any
    future surface that wants the "identity" look can just opt in via
    `.user-menu-avatar`. Falls back to the solid `--color-accent-bg`
@@ -286,13 +285,13 @@ pre code {
   background: linear-gradient(135deg, var(--color-accent), var(--color-info));
 }
 [data-theme="light"] .user-menu-avatar {
-  /* Slightly lighter mix on white canvas — the dark-theme accent
+  /* Slightly lighter mix on white canvas, the dark-theme accent
      pair is too saturated on a near-white background. */
   background: linear-gradient(135deg, var(--color-accent), var(--color-signal));
   color: #ffffff;
 }
 
-/* Topbar brand mark — wraps the Logo in an accent-tinted tile so the
+/* Topbar brand mark, wraps the Logo in an accent-tinted tile so the
    mark + wordmark read as one unit. Color cascades through Logo's
    `currentColor` so the SVG glyph tracks the active theme accent. */
 .brand-tile {
@@ -301,19 +300,472 @@ pre code {
   border: 1px solid var(--color-accent-border);
 }
 
-/* Topbar mono sub-badge — the small "SE CONSOLE" tag under the
-   wordmark. Faint border, mono caps, used as a typographic mark only. */
-.brand-sub-badge {
+/* Topbar brand tag, single-line mono caps pill beside the wordmark.
+   Matches the v1 design canvas (`.brand-tag` in clarion-redesign.html).
+   Purely typographic, not interactive. */
+.brand-tag {
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--color-text-faint);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
+  border-radius: 5px;
+  padding: 4px 7px;
   line-height: 1.2;
+  margin-left: 4px;
 }
+
+/* LiveDemoCard pulsing green dot. Matches the v1 design canvas's
+   `.live-dot` (green = "telemetry actually flowing"), distinct from
+   the teal accent dot the ActiveSessionStrip uses for "build phase
+   running". */
+.live-dot {
+  background: var(--color-live);
+  box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.18);
+  animation: clarion-live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes clarion-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.18); }
+  50%      { box-shadow: 0 0 0 8px rgba(110, 231, 183, 0.04); }
+}
+[data-theme="light"] .live-dot {
+  /* Light theme uses a deeper green (#047857) for AA contrast. */
+  box-shadow: 0 0 0 4px rgba(4, 120, 87, 0.22);
+  animation-name: clarion-live-pulse-light;
+}
+@keyframes clarion-live-pulse-light {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(4, 120, 87, 0.22); }
+  50%      { box-shadow: 0 0 0 8px rgba(4, 120, 87, 0.04); }
+}
+
+/* Dashboard H1, `.h1-display` is the gradient-text span ("live demo")
+   inside the otherwise-plain title. Tracks the active theme accents. */
+.h1-display {
+  background: linear-gradient(120deg, var(--color-accent), var(--color-signal));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Recent-builds row-flag, 3px colored bar on the left edge of a row
+   indicating its state (live / warn / muted). Matches v1 design canvas
+   `.row-flag` semantics. Rendered as a pseudo-element via the class on
+   the FIRST <td> so it lines up flush with the row's top/bottom edges. */
+.row-flag {
+  display: inline-block;
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  margin-right: 8px;
+  vertical-align: middle;
+  background: transparent;
+}
+.row-flag.live  { background: var(--color-live); }
+.row-flag.warn  { background: var(--color-warning); }
+.row-flag.muted { background: var(--color-border-strong); }
+.row-flag.danger { background: var(--color-danger); }
+
+/* ActiveSessionStrip pulse, 8px teal dot with a halo ring that expands
+   from 6px → 10px and fades out, every 1.8s. Used on the Dashboard hero
+   strip when a build is live; matches the design-spec keyframe from
+   `clarion-redesign-v2/dashboard.md`. Skip the keyframe entirely under
+   prefers-reduced-motion (the @media block at the top of this file
+   already neutralizes all animations, so this just shows a static dot). */
+.active-session-dot {
+  box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.18);
+  animation: clarion-pulse 1.8s ease-in-out infinite;
+}
+[data-theme="light"] .active-session-dot {
+  /* Light-theme accent is deeper teal (#0d9488); recolor the halo so
+     it stays AA-visible against the warm light canvas. */
+  box-shadow: 0 0 0 6px rgba(13, 148, 136, 0.22);
+}
+@keyframes clarion-pulse {
+  50% { box-shadow: 0 0 0 10px rgba(45, 212, 191, 0); }
+}
+[data-theme="light"] .active-session-dot {
+  animation-name: clarion-pulse-light;
+}
+@keyframes clarion-pulse-light {
+  50% { box-shadow: 0 0 0 10px rgba(13, 148, 136, 0); }
+}
+
+/* ─── Setup wizard (v1 design canvas) ──────────────────────────────
+   Centered max-880 card containing a step rail at top + 2-col body.
+   Matches the v1 mockup's "Let's get you set up." layout. */
+.setup-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: start center;
+  padding: 48px 24px 64px;
+}
+.setup-card {
+  width: 100%;
+  max-width: 880px;
+  background: var(--color-canvas-elev1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+/* Settings-mode card uses the full Layout width, no centered 880px
+   constraint, so the right column (Bulk import + Save & launch)
+   gets real breathing room instead of stacking tightly in 300px. */
+.setup-card[data-mode="settings"] {
+  max-width: none;
+}
+.setup-rail {
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-canvas);
+}
+.setup-rail-item {
+  flex: 1;
+  padding: 18px 20px;
+  display: flex; align-items: center; gap: 12px;
+  border-right: 1px solid var(--color-border);
+  border-top: 0; border-bottom: 0; border-left: 0;
+  position: relative;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease);
+}
+.setup-rail-item:hover {
+  background: color-mix(in srgb, var(--color-canvas-elev1) 60%, transparent);
+}
+.setup-rail-item:last-child { border-right: 0; }
+.setup-rail-item .n {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  display: grid; place-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.setup-rail-item.done .n {
+  background: var(--color-success);
+  color: var(--color-canvas);
+  border-color: var(--color-success);
+}
+.setup-rail-item.active .n {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-color: var(--color-accent);
+}
+.setup-rail-item.active { background: var(--color-canvas-elev1); }
+.setup-rail-item.locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.setup-rail-item.locked:hover {
+  background: transparent;
+}
+.setup-rail-item.locked .n {
+  background: transparent;
+  color: var(--color-text-faint);
+  border-color: var(--color-border);
+}
+.setup-rail-item .lbl-grp {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.setup-rail-item .lbl {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+.setup-rail-item .sub {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* Setup form fields, v1 .field treatment with uppercase mono labels,
+   42px inputs, accent focus ring. */
+.setup-field { margin-bottom: 18px; }
+.setup-field-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.setup-field-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: 0;
+  transition: border-color var(--motion-fast) var(--ease),
+              box-shadow var(--motion-fast) var(--ease);
+}
+.setup-field-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-bg);
+}
+.setup-field-valid {
+  color: var(--color-live);
+  font-size: 11px;
+  margin-top: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.setup-field-invalid {
+  color: var(--color-danger);
+  font-size: 11px;
+  margin-top: 6px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.setup-field-hint {
+  color: var(--color-text-faint);
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+/* Setup aside, right column with .env upload zone */
+.setup-aside {
+  background: var(--color-canvas-elev2);
+  border-radius: var(--radius);
+  padding: 24px;
+  border: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.setup-dropzone {
+  border: 1.5px dashed var(--color-border-strong);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: center;
+  background: var(--color-canvas);
+  transition: border-color var(--motion-fast) var(--ease),
+              background var(--motion-fast) var(--ease);
+}
+.setup-dropzone:hover,
+.setup-dropzone.dragging {
+  border-color: var(--color-accent);
+  background: var(--color-accent-bg);
+}
+.setup-dropzone .big {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+.setup-dropzone .small {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  margin-top: 4px;
+}
+
+/* Setup mark, small gradient tile next to the "Clarion" wordmark
+   above the wizard's H1. Matches the v1 mockup's centered header. */
+.setup-mark {
+  width: 24px; height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--color-accent), var(--color-signal));
+  color: var(--color-on-accent);
+}
+
+/* ─── Pipeline journey (CDD pipeline run mockup) ──────────────────
+   The horizontal "six phases as columns" layout for the live build
+   view at /pipelines/:id (renders inside NewDemo.tsx). Designed to
+   replace the dense PhaseRow + side-log split with a single card. */
+.journey {
+  margin-top: 16px;
+  background: var(--color-canvas-elev1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.journey-head {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.journey-target {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-text);
+}
+.journey-meta {
+  display: flex; gap: 18px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+.journey-meta > div { display: flex; align-items: baseline; gap: 6px; }
+.journey-meta b { color: var(--color-text); font-weight: 500; }
+
+.journey-steps {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0;
+}
+.journey-step {
+  padding: 18px 16px 14px;
+  border-right: 1px solid var(--color-border);
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background var(--motion-fast) ease;
+  text-align: left;
+  background: transparent;
+  border-top: 0; border-bottom: 0; border-left: 0;
+  color: inherit;
+  font: inherit;
+}
+.journey-step:last-child { border-right: 0; }
+.journey-step:hover { background: var(--color-canvas-elev2); }
+.journey-step.is-active {
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-canvas-elev1));
+}
+.journey-step.is-active::before {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 2px; background: var(--color-accent);
+}
+.journey-step-head {
+  display: flex; align-items: center; gap: 10px;
+}
+.journey-step-no {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-faint);
+  letter-spacing: 0.06em;
+}
+.journey-step-icon {
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  display: grid; place-items: center;
+  background: var(--color-canvas-elev2);
+  color: var(--color-text-faint);
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.journey-step.done    .journey-step-icon {
+  background: var(--color-live-bg);
+  color: var(--color-live);
+  border-color: color-mix(in srgb, var(--color-live) 30%, transparent);
+}
+.journey-step.running .journey-step-icon {
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+.journey-step.failed  .journey-step-icon {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
+}
+.journey-step.skipped .journey-step-icon { opacity: .45; }
+.journey-step-name {
+  font-size: 13px; font-weight: 500;
+  color: var(--color-text); margin: 0;
+}
+.journey-step-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-faint);
+  display: flex; gap: 10px;
+}
+.journey-step-bar {
+  height: 3px; border-radius: 3px;
+  background: var(--color-canvas-elev2);
+  overflow: hidden;
+}
+.journey-step-bar > i {
+  display: block; height: 100%; background: var(--color-accent);
+}
+.journey-step.done    .journey-step-bar > i { background: var(--color-live);    width: 100%; }
+.journey-step.running .journey-step-bar > i { background: var(--color-accent);  width: 62%; animation: journey-shimmer 1.6s ease-in-out infinite; }
+.journey-step.failed  .journey-step-bar > i { background: var(--color-danger);  width: 100%; }
+.journey-step.pending .journey-step-bar > i { width: 0; }
+@keyframes journey-shimmer {
+  0%, 100% { opacity: .5; }
+  50%      { opacity: 1; }
+}
+
+.journey-detail {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  border-top: 1px solid var(--color-border);
+  min-height: 280px;
+}
+@media (max-width: 1000px) {
+  .journey-detail { grid-template-columns: 1fr; }
+  .journey-side { border-right: 0; border-bottom: 1px solid var(--color-border); }
+}
+.journey-side {
+  padding: 20px;
+  border-right: 1px solid var(--color-border);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.journey-side h3 { font-size: 13px; font-weight: 500; margin: 0; }
+.journey-side .desc {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.journey-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.journey-stats div {
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.journey-stats .v {
+  font-size: 18px; font-weight: 500;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.journey-stats .l {
+  font-size: 10px;
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.journey-log {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--color-canvas);
+  color: var(--color-text-muted);
+  padding: 16px 20px;
+  line-height: 1.65;
+  overflow: auto;
+  max-height: 480px;
+  position: relative;
+}
+.journey-log .ts  { color: var(--color-text-faint); margin-right: 10px; }
+.journey-log .lvl-info { color: var(--color-info);    margin-right: 6px; }
+.journey-log .lvl-ok   { color: var(--color-live);    margin-right: 6px; }
+.journey-log .lvl-warn { color: var(--color-warning); margin-right: 6px; }
+.journey-log .lvl-err  { color: var(--color-danger);  margin-right: 6px; }
+.journey-log .line { white-space: pre-wrap; word-break: break-word; }
 
 /* Utility for screen-reader-only content. Used by ARIA labels we want
    to expose to assistive tech but keep visually invisible. */

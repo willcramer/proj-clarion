@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 /**
- * Minimal tabs primitive. Controlled — parent owns active state. We
+ * Minimal tabs primitive. Controlled, parent owns active state. We
  * keep this simple instead of pulling shadcn/Radix because we have
  * exactly one place that uses it.
  */

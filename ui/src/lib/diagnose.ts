@@ -6,10 +6,10 @@
  * lines, returns a Diagnosis with:
  *   - kind:     a short identifier so the UI can pick an icon / colour
  *   - summary:  one-sentence human explanation of what broke
- *   - suggested: actionable hint — what to try, where to look, or what
+ *   - suggested: actionable hint, what to try, where to look, or what
  *               file to edit
  *   - retryable: whether a fresh re-run (same URL) is likely to help
- *   - severity: error / warning — most failures are errors, but some
+ *   - severity: error / warning, most failures are errors, but some
  *               (e.g. transient DNS) are softer
  *
  * Add new branches at the top of `diagnose()` as we discover them.
@@ -85,7 +85,7 @@ export function diagnose(
     };
   }
 
-  // LLM output got cut off mid-string — most often a max_tokens setting
+  // LLM output got cut off mid-string, most often a max_tokens setting
   // that's too small for the vertical's fan-out. The planner's _llm_json
   // dumps the raw response and surfaces the path; we recognise either
   // the dump-path marker or the raw "Unterminated string" error.
@@ -98,7 +98,7 @@ export function diagnose(
     const dump = dumpMatch?.[1];
     return {
       kind: "llm-truncated",
-      summary: "LLM output was truncated mid-string — its max_tokens for this phase is too small.",
+      summary: "LLM output was truncated mid-string, its max_tokens for this phase is too small.",
       suggested:
         "Bump the call's `max_tokens` in agents/planner.py for the failing phase "
         + "(propose_assistant_tools, build_kg, propose_dashboards_and_alerts each "
@@ -136,7 +136,7 @@ export function diagnose(
   if (/host.*not.*allow|RESEARCH_ALLOWED_HOSTS|fetcher.refused/i.test(blob)) {
     return {
       kind: "host-not-allowed",
-      summary: "The research agent refused to fetch the URL — host isn't in `RESEARCH_ALLOWED_HOSTS`.",
+      summary: "The research agent refused to fetch the URL, host isn't in `RESEARCH_ALLOWED_HOSTS`.",
       suggested: "Add the company's domain to RESEARCH_ALLOWED_HOSTS in `.env`, "
         + "then restart the API (`lsof -ti:8765 | xargs kill && just api`) and re-run.",
       retryable: false,
@@ -148,7 +148,7 @@ export function diagnose(
   if (/401.*Unauthorized|invalid.*api.?key|ANTHROPIC_API_KEY/i.test(blob)) {
     return {
       kind: "anthropic-auth",
-      summary: "Anthropic API rejected the request — usually a bad or missing key.",
+      summary: "Anthropic API rejected the request, usually a bad or missing key.",
       suggested: "Check `ANTHROPIC_API_KEY` in `.env`. Restart the API after editing.",
       retryable: false,
       severity: "error",
@@ -170,7 +170,7 @@ export function diagnose(
   if (/ingestion.*rate.*limit.*Loki|429.*ResourceExhausted/i.test(blob)) {
     return {
       kind: "loki-rate-limit",
-      summary: "Cloud Loki rejected log writes — your tier's bytes/sec limit was hit.",
+      summary: "Cloud Loki rejected log writes, your tier's bytes/sec limit was hit.",
       suggested: "Lower the live-tail batch (--batch 50 --interval 5) or reduce "
         + "--days for generate. The rest of the pipeline keeps working; logs "
         + "just don't all land.",
@@ -195,7 +195,7 @@ export function diagnose(
     return {
       kind: "dns-failure",
       summary: "A source URL didn't resolve. The fetcher logs and continues.",
-      suggested: "Usually harmless — research uses other sources. If the *primary* "
+      suggested: "Usually harmless, research uses other sources. If the *primary* "
         + "company URL itself fails, the run will produce no profile; verify the "
         + "URL is correct and reachable.",
       retryable: true,
@@ -221,7 +221,7 @@ export function diagnose(
       kind: "no-data-fetched",
       summary: "Research couldn't fetch any usable content from the sources.",
       suggested: "Check the URL is live. The agent's allow-list may be filtering "
-        + "all your candidate sources — see RESEARCH_ALLOWED_HOSTS in `.env`.",
+        + "all your candidate sources, see RESEARCH_ALLOWED_HOSTS in `.env`.",
       retryable: false,
       severity: "error",
     };
@@ -239,7 +239,7 @@ export function diagnose(
     };
   }
 
-  // Fall-through — never go silent on the user
+  // Fall-through, never go silent on the user
   return {
     kind: "unknown",
     summary: "Pipeline failed but the failure mode isn't in our catalog yet.",
@@ -329,7 +329,7 @@ export function computeMetrics(
 }
 
 export function formatDuration(ms: number | null): string {
-  if (ms === null) return "—";
+  if (ms === null) return ", ";
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);

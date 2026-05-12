@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
-type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "accent";
+export type BadgeTone = "neutral" | "info" | "success" | "warning" | "danger" | "accent";
+// Internal alias kept so existing call sites that reference `Tone` via
+// the module's private surface still compile.
+type Tone = BadgeTone;
 
 const TONES: Record<Tone, string> = {
   neutral: "bg-white/[0.06] text-[var(--color-text-muted)] border-[var(--color-border)]",

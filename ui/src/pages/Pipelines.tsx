@@ -1,5 +1,5 @@
 /**
- * Pipeline history — every full demo build the API has seen since
+ * Pipeline history, every full demo build the API has seen since
  * its last restart, with duration, phase breakdown, and a drill-in
  * for the per-event log.
  *
@@ -38,7 +38,7 @@ export function PipelinesPage() {
   const [params, setParams] = useSearchParams();
   const selected = params.get("p");
 
-  // Aggregate KPIs across the visible pipelines. Cheap — these lists
+  // Aggregate KPIs across the visible pipelines. Cheap, these lists
   // are bounded to a few hundred at most before the API restart wipes
   // them. Recomputing on every render is fine.
   const pipelines = list.data ?? [];
@@ -47,7 +47,7 @@ export function PipelinesPage() {
     const failed = pipelines.filter((p) => p.status === "failed").length;
     const done = pipelines.filter((p) => p.status === "done").length;
     const cancelled = pipelines.filter((p) => p.status === "cancelled").length;
-    // Median duration of finished builds — a more stable number than mean
+    // Median duration of finished builds, a more stable number than mean
     // for build pipelines where one stuck build can drag the average up.
     const durations = pipelines
       .map((p) => durationMs(p))
@@ -60,7 +60,7 @@ export function PipelinesPage() {
     return { running, failed, done, cancelled, medianDuration, total: pipelines.length };
   }, [pipelines]);
 
-  // Drilldown — caller picks one of running/failed/done; the list
+  // Drilldown, caller picks one of running/failed/done; the list
   // below filters to that subset. `null` = no filter.
   const [statusFilter, setStatusFilter] = useState<null | "running" | "failed" | "done">(null);
   const filteredPipelines = useMemo(
@@ -81,7 +81,7 @@ export function PipelinesPage() {
         </p>
       </div>
 
-      {/* KPI strip — running / failed / median duration / total. The
+      {/* KPI strip, running / failed / median duration / total. The
           interactive ones filter the list below; click again to clear. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KpiCard
@@ -257,7 +257,7 @@ function PipelineEventsPanel({ pipelineId }: { pipelineId: string }) {
 
   // Compute per-phase rollups from the buffered events. We don't have
   // server timestamps yet (a v0.7 backend follow-up) so durations here
-  // are based on event ordering — not wall-clock — but counts are exact.
+  // are based on event ordering, not wall-clock, but counts are exact.
   const phaseRollup = useMemo(() => {
     const empty: Record<PipelinePhase, { logs: number; errors: number; status: string }> =
       Object.fromEntries(
@@ -281,7 +281,7 @@ function PipelineEventsPanel({ pipelineId }: { pipelineId: string }) {
     return empty;
   }, [events.data]);
 
-  // Scroll handling lives inside <LogView> now — it auto-tails when the
+  // Scroll handling lives inside <LogView> now, it auto-tails when the
   // user is near the bottom and pauses when they scroll up. We keep the
   // filter state here.
   const [filter, setFilter] = useState("");
@@ -291,7 +291,7 @@ function PipelineEventsPanel({ pipelineId }: { pipelineId: string }) {
     const wanted = filter.toLowerCase();
     const out: string[] = [];
     for (const ev of events.data.events) {
-      const phase = (ev.phase as string) || "—";
+      const phase = (ev.phase as string) || ", ";
       const line = (ev.line as string) ?? null;
       const t = ev.event as string;
       if (line == null && t === "log") continue;
@@ -427,7 +427,7 @@ function PipelineEventsPanel({ pipelineId }: { pipelineId: string }) {
   );
 }
 
-// ChevronRight isn't used directly here — keep import to avoid forgetting we
+// ChevronRight isn't used directly here, keep import to avoid forgetting we
 // might add a "deeper drill" view later. Stub usage to silence lint.
 void ChevronRight;
 

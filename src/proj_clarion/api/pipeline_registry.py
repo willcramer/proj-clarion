@@ -157,13 +157,21 @@ def start_pipeline(
     days: int = 1,
     *,
     volume_per_day: int | None = None,
+    stop_after_phase: str | None = None,
 ) -> PipelineState:
-    """Full build: research → plan → approve → generate → provision → kg-publish."""
+    """Full build: research → plan → approve → generate → provision → kg-publish.
+
+    `stop_after_phase`: optional cut-off. When set, the pipeline exits
+    after that phase completes successfully. Use "research" for a
+    profile-only build (no plan, no Cloud-side provisioning)."""
     return _spawn(
         url=url, company=company, days=days,
         trigger="full", starting_phase=None,
         parent_pipeline_id=None,
-        runner_kwargs={"volume_per_day": volume_per_day},
+        runner_kwargs={
+            "volume_per_day": volume_per_day,
+            "stop_after_phase": stop_after_phase,
+        },
     )
 
 

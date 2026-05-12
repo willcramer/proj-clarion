@@ -1,5 +1,5 @@
 /**
- * Global pipeline state — survives page navigations.
+ * Global pipeline state, survives page navigations.
  *
  * Why this exists: the SE-builder pipeline runs ~10-15 minutes. Holding
  * state in NewDemo.tsx's useState meant a tab switch / route change
@@ -8,7 +8,7 @@
  *
  * This Provider:
  *   - Holds the active pipeline ID + accumulated events at app scope.
- *   - Owns the SSE connection — opens it once, keeps it open across
+ *   - Owns the SSE connection, opens it once, keeps it open across
  *     route changes.
  *   - On app load, calls /api/pipelines and resumes following any
  *     pipeline that's still running. So even closing the browser and
@@ -41,8 +41,7 @@ export interface PhaseState {
   error?: string;
   /** Wall-clock when we first saw `phase:started` for this phase, or
    *  when the first event arrived if we missed `started` (e.g.
-   *  reconnecting mid-stream). Used only for client-side metrics —
-   *  the server still owns canonical timing. */
+   *  reconnecting mid-stream). Used only for client-side metrics,    *  the server still owns canonical timing. */
   startedAt?: number;
   /** Wall-clock when we saw `phase:done` or `phase:failed`. */
   finishedAt?: number;
@@ -58,7 +57,7 @@ const INITIAL_PHASES: Record<PipelinePhase, PhaseState> = {
 };
 
 export interface PipelineUiState {
-  /** Server-assigned ID — or null if no pipeline is being followed. */
+  /** Server-assigned ID, or null if no pipeline is being followed. */
   pipelineId: string | null;
   /** Mirrors the server-side .status. */
   status: "idle" | "running" | "done" | "failed" | "cancelled";
@@ -91,8 +90,16 @@ const INITIAL: PipelineUiState = {
 };
 
 interface PipelineContextValue extends PipelineUiState {
-  /** Start a new pipeline. Returns the pipeline_id. */
-  start: (body: { url: string; company?: string; days?: number; volume_per_day?: number }) => Promise<string>;
+  /** Start a new pipeline. Returns the pipeline_id.
+   *  `stop_after_phase` cuts the build short after that phase completes
+   *  successfully, pass "research" for a profile-only research run. */
+  start: (body: {
+    url: string;
+    company?: string;
+    days?: number;
+    volume_per_day?: number;
+    stop_after_phase?: PipelinePhase;
+  }) => Promise<string>;
   /** Resume from a specific phase. New pipeline_id; parent linkage on the server. */
   startFromPhase: (body: {
     phase: PipelinePhase;
@@ -113,7 +120,7 @@ interface PipelineContextValue extends PipelineUiState {
    *  non-`done` phase, and start a new pipeline from there with the
    *  profile_id/plan_id artifacts inherited from the source.
    *
-   *  This is what the top-level Re-run button SHOULD do — never redo
+   *  This is what the top-level Re-run button SHOULD do, never redo
    *  a successful research/plan because the user is paying the LLM
    *  cost both times. If everything was done already, falls back to
    *  null (caller can choose: run fresh or no-op). */
@@ -185,7 +192,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       }
       if (ev.event === "phase") {
         // Map server `phase:*` event statuses to UI PhaseStatus.
-        // `skipped` is its own state — without an explicit branch it
+        // `skipped` is its own state, without an explicit branch it
         // falls through to "failed" and the row renders as red error,
         // which is wrong for "this phase didn't run because we resumed
         // from a later one."
@@ -238,7 +245,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
    *
    *  `seed` lets resume-on-mount preload canonical timestamps from the
    *  /api/pipelines summary so the duration ticker shows real elapsed
-   *  time after a refresh — not the moment we re-attached. Without this
+   *  time after a refresh, not the moment we re-attached. Without this
    *  the SSE replay re-stamps `pipeline:started` with Date.now(), which
    *  silently zeroes the timer. */
   const follow = useCallback((pipelineId: string, seed?: Partial<PipelineUiState>) => {
@@ -279,7 +286,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       if (target) {
         follow(target.pipeline_id, seedFrom(target));
       } else if (pinned) {
-        // Pipeline finished while we were away — still want to show its
+        // Pipeline finished while we were away, still want to show its
         // final state. Fetch the events snapshot and replay them all.
         const snap = await fetch(`/api/pipelines/${pinned.pipeline_id}/events`)
           .then((r) => r.json())
@@ -302,7 +309,13 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const start = useCallback(async (body: { url: string; company?: string; days?: number }) => {
+  const start = useCallback(async (body: {
+    url: string;
+    company?: string;
+    days?: number;
+    volume_per_day?: number;
+    stop_after_phase?: PipelinePhase;
+  }) => {
     const summary = await createPipeline(body);
     follow(summary.pipeline_id, {
       startedAt: summary.started_at ? new Date(summary.started_at).getTime() : undefined,
@@ -380,7 +393,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     if (!summary) return null;
 
     // Pull the artifacts the source pipeline produced. Some phases may
-    // have failed before persisting their artifact — server returned
+    // have failed before persisting their artifact, server returned
     // null in that case and startFromPhase will validate.
     const profileFromPhases = phases.find((p) => p.artifact?.profile_id)?.artifact?.profile_id;
     const planFromPhases    = phases.find((p) => p.artifact?.plan_id)?.artifact?.plan_id;

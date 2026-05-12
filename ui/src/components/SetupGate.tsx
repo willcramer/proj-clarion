@@ -1,5 +1,5 @@
 /**
- * SetupGate — top-level wrapper that checks setup status and renders
+ * SetupGate, top-level wrapper that checks setup status and renders
  * the Setup page when the backend isn't ready yet.
  *
  * Flow:
@@ -9,7 +9,7 @@
  *   4. After Setup's "Save & launch" succeeds, refetch status; once
  *      ready, this component unmounts the Setup view and the app loads.
  *
- * We also listen for `SetupRequiredError` thrown by api.ts — that fires
+ * We also listen for `SetupRequiredError` thrown by api.ts, that fires
  * if the user has the app open in a tab and the backend's env gets
  * cleared (or they manually deleted .env). In that case we flip the
  * gate state and show the wizard, no full-page reload needed.
@@ -30,7 +30,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
       const s = await setupApi.status();
       setStatus(s);
     } catch (e) {
-      // Network error reaching the API at all — show a help message so
+      // Network error reaching the API at all, show a help message so
       // the user knows it's not their tokens, it's that the backend is
       // off. Most common cause during dev.
       setError(e instanceof Error ? e.message : String(e));

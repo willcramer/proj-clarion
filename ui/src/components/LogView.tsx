@@ -1,28 +1,28 @@
 /**
- * LogView — readable, color-coded log surface used everywhere we render
+ * LogView, readable, color-coded log surface used everywhere we render
  * a stream of log lines (build runner, pipeline events, run output,
  * profile JSONL).
  *
  * Two layers of highlighting:
  *
- * 1. **Per-line severity tint** — a tiny regex-based detector classifies
+ * 1. **Per-line severity tint**, a tiny regex-based detector classifies
  *    each line as `error / warn / success / info / debug / null` and tints
  *    the line's background + applies a left border in the matching tone.
  *    The eye learns to scan the gutter for color, then dives into specific
- *    lines. Severity is detected ONCE per line and memoized — adding
+ *    lines. Severity is detected ONCE per line and memoized, adding
  *    another 1k log lines doesn't re-classify the existing ones.
  *
- * 2. **Inline token highlighting** — within each line, common log tokens
+ * 2. **Inline token highlighting**, within each line, common log tokens
  *    get a colour: timestamps (muted), severity labels (chip), HTTP
  *    methods (accent), HTTP status codes (coloured by 2xx / 4xx / 5xx
  *    class), file:line locators (faint accent), UUIDs (mono pop),
  *    URLs (info), numbers-with-units (warning), quoted strings (success).
- *    All via a single multi-group regex pass per line — fast enough that
+ *    All via a single multi-group regex pass per line, fast enough that
  *    the runner still scrolls smoothly at 50+ lines/second.
  *
  * Auto-scrolls to the bottom on new lines unless the user has scrolled
  * up (we detect the gap and pause auto-scroll until they're near the
- * bottom again — same pattern most modern log viewers use).
+ * bottom again, same pattern most modern log viewers use).
  *
  * a11y: rendered as a `role="log"` live region so assistive tech can
  * track new lines if the user wants it. The actual line content is in
@@ -44,7 +44,7 @@ export type LogViewProps = {
   staticView?: boolean;
   /** Optional className for the outer container. */
   className?: string;
-  /** Optional `aria-live` politeness — defaults to `polite`. Set
+  /** Optional `aria-live` politeness, defaults to `polite`. Set
    *  `"off"` for surfaces where line updates aren't useful to announce. */
   ariaLive?: "off" | "polite" | "assertive";
 };
@@ -54,7 +54,7 @@ type Severity = "error" | "warn" | "info" | "debug" | "success" | null;
 const SEVERITY_STYLES: Record<Exclude<Severity, null>, string> = {
   // Errors should be unmissable. A 4-px left bar (vs 2px on others) +
   // a stronger red tint trade some layout symmetry for "this line is
-  // bad" legibility. We don't override the row text colour — the
+  // bad" legibility. We don't override the row text colour, the
   // inline-token colours (status codes, methods) carry information
   // that's worth preserving against the red wash.
   error:   "border-l-4 border-l-[var(--color-danger)] bg-[var(--color-danger-bg)]",
@@ -76,14 +76,14 @@ const SEVERITY_TEXT: Record<Exclude<Severity, null>, string> = {
 //
 // Two forms appear in the wild:
 //   1. Proper ANSI: ESC `[Nm` (the ESC byte is `\x1b`).
-//   2. "Half-stripped" ANSI: just `[Nm` — happens when the producer
+//   2. "Half-stripped" ANSI: just `[Nm`, happens when the producer
 //      writes ESC sequences but a downstream pipe (Python's structlog
 //      colorama wrapper, async subprocess buffering) drops the ESC byte
 //      and leaves the literal CSI bracket. This is what we see in the
 //      Sentinel build logs ("`[2m...[0m`" leaking into the rendered log).
 //
 // Stripping #2 has a small false-positive risk on text like
-// "value [42m] is bad" — but that pattern's vanishingly rare in
+// "value [42m] is bad", but that pattern's vanishingly rare in
 // structured logs vs. the certain wins of cleaning up structlog output.
 function stripAnsi(line: string): string {
   return line
@@ -91,7 +91,7 @@ function stripAnsi(line: string): string {
     .replace(/\[[0-9;]*m/g, "");     // half-stripped CSI residue
 }
 
-// Per-line severity classifier — runs on the *cleaned* line (after
+// Per-line severity classifier, runs on the *cleaned* line (after
 // stripAnsi). Priority: explicit error words > structured error
 // signals > HTTP 5xx > warn > success > info / debug.
 //
@@ -103,12 +103,12 @@ function detectSeverity(cleaned: string): Severity {
 
   // ── Strong error signals ──
   if (/\b(ERROR|FATAL|CRITICAL|FAIL(?:ED|URE)?|EXCEPTION|TRACEBACK|PANIC|SEGFAULT|abort)\b/i.test(cleaned)) return "error";
-  // Named error/exception classes — Python and JS stack traces almost
+  // Named error/exception classes, Python and JS stack traces almost
   // always contain `XYZError:` / `XYZException:` even on the LAST line
   // (the type + message). Catches `TypeError`, `ValueError`,
   // `IntegrityError`, `ReferenceError`, `ConnectionRefusedError`, etc.
   if (/\b(?:[A-Z][a-zA-Z]*?(?:Error|Exception|Failure))\b/.test(cleaned)) return "error";
-  // Traceback continuation lines — Python: `  File "x.py", line N, in fn`,
+  // Traceback continuation lines, Python: `  File "x.py", line N, in fn`,
   // JS: `    at functionName (...)`. These are the body of a multi-line
   // error and should tint with the same red as the head.
   if (/^\s+File "[^"]+", line \d+/.test(cleaned)) return "error";
@@ -126,7 +126,7 @@ function detectSeverity(cleaned: string): Severity {
   // ── HTTP-status-as-error ──
   // 5xx anywhere in the line ⇒ server error. We match `HTTP/...5\d{2}`
   // OR a bare `5\d{2}` followed by a known reason phrase (so we don't
-  // flag random 500-ish numbers like `500ms` — they end in non-digit
+  // flag random 500-ish numbers like `500ms`, they end in non-digit
   // but the lookahead handles it).
   if (/\bHTTP\/\d\.\d"?\s+5\d{2}\b/i.test(cleaned)) return "error";
   if (/\b5\d{2}\s+(?:Internal Server Error|Service Unavailable|Bad Gateway|Gateway Timeout)/i.test(cleaned)) return "error";
@@ -145,7 +145,7 @@ function detectSeverity(cleaned: string): Severity {
   // pushes. Strict word-boundary so it doesn't catch "rewrote" or
   // similar in error messages.
   if (/(?:^|\s)[✓✅]\s|\b(?:succeeded|completed|created|persisted|ready|wrote|pushed)\b/i.test(cleaned)) return "success";
-  // 2xx HTTP responses are success-flavoured info — info colour
+  // 2xx HTTP responses are success-flavoured info, info colour
   // (not green) so they don't drown out actual completion lines.
 
   // ── Plain INFO / DEBUG ──
@@ -161,7 +161,7 @@ function detectSeverity(cleaned: string): Severity {
 //
 // Patterns:
 //   1: ISO 8601 / RFC 3339 timestamp
-//   2: severity word (only when standalone — already handled by line tint
+//   2: severity word (only when standalone, already handled by line tint
 //      but we colour it too for legibility)
 //   3: HTTP method
 //   4: HTTP 1xx-5xx status code (3 digits)
@@ -210,7 +210,7 @@ const KIND_TO_CLASS: Record<Exclude<TokenKind, "plain">, string> = {
   dquoted:  "text-[var(--color-success)]",
   squoted:  "text-[var(--color-success)]",
   kv:       "text-[var(--color-text-muted)]",
-  // `error_count=6`, `errors=2`, `failed=1` — the structured-log
+  // `error_count=6`, `errors=2`, `failed=1`, the structured-log
   // signal that triggered our line tint. Colour them red even on
   // already-tinted rows so the eye lands directly on the count.
   errkv:    "text-[var(--color-danger)] font-medium",
@@ -245,7 +245,7 @@ function tokenize(line: string): Token[] {
     else if (m[11]) out.push({ kind: "squoted", text: m[11] });
     else if (m[12]) {
       // Special-case: `error_count=N` / `errors=N` / `failed=N` /
-      // `failures=N` with N > 0 — promote to `errkv` so the count
+      // `failures=N` with N > 0, promote to `errkv` so the count
       // pops red even on tinted rows. `=0` stays neutral.
       const errMatch = m[12].match(ERROR_KV_RE);
       const isErr = errMatch && parseInt(errMatch[1], 10) > 0;
@@ -290,7 +290,7 @@ export function LogView({
   ariaLive = "polite",
 }: LogViewProps) {
   // Strip ANSI, then tokenize + classify each cleaned line. Memoized by
-  // the lines array reference — PipelineContext appends to logs in-place
+  // the lines array reference, PipelineContext appends to logs in-place
   // but always replaces the outer object, so `lines` stays referentially
   // stable until something changes and useMemo correctly invalidates.
   const decorated = useMemo(

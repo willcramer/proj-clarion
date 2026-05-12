@@ -1,18 +1,18 @@
 /**
- * Toast — non-blocking notifications anchored to the bottom-right of the
+ * Toast, non-blocking notifications anchored to the bottom-right of the
  * viewport. Used for build-completed / build-failed / "we used X URL"
  * announcements that don't need a modal.
  *
  * Design constraints:
- * - **Non-blocking** — no focus trap, no overlay; the user keeps doing
+ * - **Non-blocking**, no focus trap, no overlay; the user keeps doing
  *   what they were doing.
- * - **Live region** — wrapped in `aria-live="polite"` so screen readers
+ * - **Live region**, wrapped in `aria-live="polite"` so screen readers
  *   announce the toast when it appears, but don't interrupt urgent
  *   reading (we'd use `assertive` only for failures).
- * - **Auto-dismiss with manual override** — `duration` defaults to 6s;
+ * - **Auto-dismiss with manual override**, `duration` defaults to 6s;
  *   pass `0` for sticky toasts (failure paths typically). The X button
  *   is always present.
- * - **Stackable** — multiple toasts stack vertically with newest at
+ * - **Stackable**, multiple toasts stack vertically with newest at
  *   the bottom. `useToasts()` hook owns the stack; consumers call
  *   `push(toast)` and `dismiss(id)`.
  */
@@ -87,7 +87,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       <div
         // `aria-live="polite"` so screen readers announce new toasts
         // without interrupting the user's current focus. Use a separate
-        // live region per toast tone for failures? Not yet — `polite`
+        // live region per toast tone for failures? Not yet, `polite`
         // is fine for our cadence (1-2 toasts per build).
         aria-live="polite"
         aria-atomic="false"
@@ -112,7 +112,7 @@ export function useToasts() {
 function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const Icon = ICONS[toast.tone];
   // Slide-in animation. We use a state flag so the initial render
-  // mounts at translate-x-full, then flips to 0 in a useEffect — this
+  // mounts at translate-x-full, then flips to 0 in a useEffect, this
   // gives the browser a chance to apply the transition class.
   const [mounted, setMounted] = useState(false);
   useEffect(() => {

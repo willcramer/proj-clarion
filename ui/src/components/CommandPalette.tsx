@@ -64,7 +64,7 @@ export function CommandPalette({ open, onOpenChange }: PaletteProps) {
                   onSelect={() => go(`/plans/${p.plan_id}`)}
                   hint={p.review_state}
                 >
-                  {p.source_profile_id} — {p.plan_id_short}
+                  {p.source_profile_id}, {p.plan_id_short}
                 </PaletteItem>
               ))}
             </Command.Group>
@@ -94,7 +94,7 @@ export function CommandPalette({ open, onOpenChange }: PaletteProps) {
                   onSelect={() => go(`/runs?run=${r.run_id}`)}
                   hint={r.finished ? `exit ${r.return_code}` : "running"}
                 >
-                  {r.kind} — {r.plan_id.slice(0, 8)}
+                  {r.kind}, {r.plan_id.slice(0, 8)}
                 </PaletteItem>
               ))}
             </Command.Group>

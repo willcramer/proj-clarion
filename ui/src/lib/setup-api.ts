@@ -1,9 +1,9 @@
 /**
- * Typed client for /api/setup/* — the first-run wizard endpoints.
+ * Typed client for /api/setup/*, the first-run wizard endpoints.
  *
  * These calls use raw `fetch` (not the shared `request` helper) because
  * we explicitly DON'T want the SetupGate's 503-redirect to kick in
- * here — the wizard itself is the destination of that redirect, so it
+ * here, the wizard itself is the destination of that redirect, so it
  * needs to stay reachable even when the gate is closed.
  */
 
@@ -65,7 +65,7 @@ export interface SaveResult {
 
 /**
  * Identity returned by /api/setup/identity. Any field can be null when
- * the corresponding service isn't configured / reachable yet — the
+ * the corresponding service isn't configured / reachable yet, the
  * UserMenu falls back through them in priority order.
  */
 export interface Identity {
@@ -101,7 +101,7 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       const body = await res.json();
       detail = body?.detail?.message ?? body?.detail ?? detail;
-      // Save endpoint returns a structured failures list — surface it
+      // Save endpoint returns a structured failures list, surface it
       // so the UI can highlight per-field errors instead of a wall of text.
       if (body?.detail?.failures) {
         const err = new Error(detail) as Error & { failures?: unknown };

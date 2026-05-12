@@ -84,6 +84,118 @@ class ExtendRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────────
 
 
+@router.get("/history")
+def list_history(
+    limit: int = 100,
+    offset: int = 0,
+    plan_id: str | None = None,
+) -> dict[str, Any]:
+    """Audit log of every demo session, newest first.
+
+    Returns both live and terminal rows on one timeline. Each row's
+    duration is server-derived (seconds_active) so the UI doesn't need
+    date arithmetic for ranking / sorting / display.
+
+    Pagination is offset/limit. The UI sends `limit=10&offset=...`
+    for a 10-row-per-page table; `total` is included so the pagination
+    footer can show "x-y of N".
+
+    Optional `plan_id` query scopes the history to one plan — used by
+    the per-plan Demo history strip on Plans-detail. Without it, returns
+    sessions across every plan.
+    """
+    import datetime as dt
+    if limit < 1: limit = 1
+    if limit > 500: limit = 500
+    if offset < 0: offset = 0
+
+    with session_scope() as s:
+        repo = DemoSessionRepo()
+        rows = repo.list_history(s, limit=limit, offset=offset, plan_id=plan_id)
+        total = repo.count_history(s, plan_id=plan_id)
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        started = r["started_at"]
+        finished = r["finished_at"]
+        seconds_active: float | None = None
+        if started is not None:
+            start_dt = started if started.tzinfo else started.replace(tzinfo=dt.UTC)
+            if finished is not None:
+                end_dt = finished if finished.tzinfo else finished.replace(tzinfo=dt.UTC)
+                seconds_active = (end_dt - start_dt).total_seconds()
+            elif r["status"] in ("starting", "live"):
+                seconds_active = (dt.datetime.now(dt.UTC) - start_dt).total_seconds()
+
+        out.append({
+            "session_id":     r["id"],
+            "plan_id":        r["plan_id"],
+            "pid":            r["pid"],
+            "status":         r["status"],
+            "started_at":     started.isoformat() if started else None,
+            "finished_at":    finished.isoformat() if finished else None,
+            "expires_at":     r["expires_at"].isoformat() if r["expires_at"] else None,
+            "seconds_active": seconds_active,
+            "url":            r.get("url"),
+            "company":        r.get("company"),
+            "notes":          r.get("notes"),
+        })
+
+    return {"history": out, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/sessions")
+def list_sessions() -> dict[str, Any]:
+    """All currently-running demo sessions, newest first.
+
+    Used by the dashboard's Live demo card so the SE sees what's
+    emitting right now without polling per-plan. Enriches each row
+    with derived UI fields (seconds_since_heartbeat, seconds_until_expiry,
+    health) the same way GET /status does — keeps the date arithmetic
+    on the server.
+    """
+    import datetime as dt
+    now = dt.datetime.now(dt.UTC)
+    with session_scope() as s:
+        rows = DemoSessionRepo().list_active(s)
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        hb = r["last_heartbeat_at"]
+        seconds_since_hb: float | None = None
+        if hb is not None:
+            if hb.tzinfo is None:
+                hb = hb.replace(tzinfo=dt.UTC)
+            seconds_since_hb = (now - hb).total_seconds()
+        expires_at = r["expires_at"]
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=dt.UTC)
+        seconds_until_expiry = (expires_at - now).total_seconds()
+
+        if hb is None:
+            health = "starting"
+        elif seconds_since_hb is not None and seconds_since_hb < 90:
+            health = "live"
+        else:
+            health = "stale"
+
+        out.append({
+            "session_id":            r["id"],
+            "plan_id":               r["plan_id"],
+            "pid":                   r["pid"],
+            "status":                r["status"],
+            "started_at":            r["started_at"].isoformat() if r["started_at"] else None,
+            "expires_at":            expires_at.isoformat(),
+            "last_heartbeat_at":     hb.isoformat() if hb else None,
+            "seconds_since_heartbeat": seconds_since_hb,
+            "seconds_until_expiry":  max(0.0, seconds_until_expiry),
+            "health":                health,
+            "url":                   r.get("url"),
+            "company":               r.get("company"),
+        })
+    return {"sessions": out}
+
+
 @router.get("/status")
 def get_status(plan_id: str) -> dict[str, Any]:
     """Active session for a plan, or `{ active: false }`.

@@ -1,10 +1,10 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  LayoutDashboard,
   ScrollText,
   ClipboardList,
   Activity,
+  History,
   Search,
   Sparkles,
   Loader2,
@@ -21,13 +21,26 @@ import { PipelineStatusPill } from "@/components/PipelineStatusPill";
 import { UserMenu } from "@/components/UserMenu";
 import { usePipeline } from "@/lib/PipelineContext";
 
+// Primary nav: the surfaces an SE hits during a live demo. The home
+// page (Dashboard) is reachable via the brand tile on the left, so a
+// dedicated "Dashboard" item here would be redundant. We keep the nav
+// focused on the secondary surfaces the SE drills into.
 const NAV = [
-  { to: "/",          label: "Dashboard", icon: LayoutDashboard },
-  { to: "/new",       label: "Build",     icon: Sparkles        },
-  { to: "/profiles",  label: "Profiles",  icon: ScrollText      },
-  { to: "/plans",     label: "Plans",     icon: ClipboardList   },
-  { to: "/pipelines", label: "Pipelines", icon: Activity        },
-  { to: "/runs",      label: "Runs",      icon: Activity        },
+  { to: "/new",      label: "Builds",   icon: Sparkles      },
+  { to: "/profiles", label: "Profiles", icon: ScrollText    },
+  { to: "/plans",    label: "Plans",    icon: ClipboardList },
+];
+
+// Secondary nav, surfaced via UserMenu so they remain one click away
+// without crowding the primary top bar. Mobile drawer also lists these
+// so phones don't lose access to them.
+//
+// "Pipelines" used to live here but was dropped: the "Build" primary
+// nav now goes to /new which is the builds list (consolidation per
+// CDD). /pipelines stays as a backward-compat route in App.tsx.
+export const SECONDARY_NAV = [
+  { to: "/runs",  label: "Runs",  icon: Activity },
+  { to: "/audit", label: "Audit", icon: History  },
 ];
 
 export function Layout() {
@@ -36,7 +49,7 @@ export function Layout() {
   const location = useLocation();
 
   // ⌘K / Ctrl+K to open the command palette + Esc to close mobile nav.
-  // Single keydown handler so we don't pile up listeners — the cost of
+  // Single keydown handler so we don't pile up listeners, the cost of
   // two checks per keypress is negligible vs. registering two handlers.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -160,13 +173,34 @@ function MobileNavDrawer({
               <span>{label}</span>
             </NavLink>
           ))}
+          {/* Secondary nav, phones can't fall back to the UserMenu
+              overflow as easily as desktops, so we always list them
+              under a faint divider. */}
+          <div className="my-2 mx-3 border-t border-[var(--color-border)]" />
+          {SECONDARY_NAV.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors",
+                  isActive
+                    ? "bg-white/[0.06] text-[var(--color-text)]"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-white/[0.03]",
+                )
+              }
+            >
+              <Icon size={16} aria-hidden="true" />
+              <span>{label}</span>
+            </NavLink>
+          ))}
         </nav>
       </aside>
     </div>
   );
 }
 
-/** Topbar live cluster — the headline `PipelineStatusPill` for the
+/** Topbar live cluster, the headline `PipelineStatusPill` for the
  *  followed pipeline, plus a small "+N more" sibling when other builds
  *  are running in parallel (SE queued multiple) so they're discoverable
  *  without polling /pipelines manually.
@@ -179,7 +213,7 @@ function MobileNavDrawer({
  */
 function PipelineLiveCluster() {
   const p = usePipeline();
-  // Cheap poll — bounded list size, only used to count running builds.
+  // Cheap poll, bounded list size, only used to count running builds.
   const all = useQuery({
     queryKey: ["pipelines"],
     queryFn: listPipelines,
@@ -191,12 +225,12 @@ function PipelineLiveCluster() {
   if (!followsActive && runningCount === 0) return null;
 
   if (!followsActive) {
-    // Multiple builds running but we're not actively following any — show
+    // Multiple builds running but we're not actively following any, show
     // a generic "N builds running" pill that links to /pipelines history.
     return (
       <Link
         to="/pipelines"
-        title={`${runningCount} pipeline${runningCount === 1 ? "" : "s"} running — click to view list`}
+        title={`${runningCount} pipeline${runningCount === 1 ? "" : "s"} running, click to view list`}
         className="flex items-center gap-2 px-2.5 h-7 rounded-full border text-xs transition-colors border-[color:var(--color-info)]/40 text-[var(--color-info)] bg-[var(--color-info-bg)]"
       >
         <Loader2 size={12} className="animate-spin" />
@@ -215,7 +249,7 @@ function PipelineLiveCluster() {
         <Link
           to="/pipelines"
           className="px-1.5 h-5 inline-flex items-center rounded-full bg-[var(--color-info-bg)] text-[var(--color-info)] text-[10px] font-mono"
-          title={`${otherRunning} additional build${otherRunning === 1 ? "" : "s"} running — open Pipelines to switch context`}
+          title={`${otherRunning} additional build${otherRunning === 1 ? "" : "s"} running, open Pipelines to switch context`}
         >
           +{otherRunning}
         </Link>
@@ -244,7 +278,7 @@ function TopBar({
       className="sticky top-0 z-30 border-b border-[var(--color-border)] backdrop-blur bg-[var(--color-canvas)]/75"
     >
       <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 h-16 flex items-center gap-4 lg:gap-6">
-        {/* Hamburger — only on mobile. Opens the slide-in drawer. */}
+        {/* Hamburger, only on mobile. Opens the slide-in drawer. */}
         <button
           type="button"
           onClick={onOpenMobileNav}
@@ -253,11 +287,11 @@ function TopBar({
         >
           <Menu size={18} aria-hidden="true" />
         </button>
-        {/* Brand cluster — accent-tinted "brand tile" wraps the Logo
-            mark, wordmark sits beside it with a mono SE CONSOLE sub-
-            badge to distinguish this surface from any future Cloud-
-            facing Clarion product. The Logo's stroke is `currentColor`,
-            so the tile's color tracks the active theme accent. */}
+        {/* Brand cluster, accent-tinted tile wraps the Logo, wordmark
+            sits to its right, then a small 2-line mono "SE / CONSOLE"
+            pill beside the wordmark (per v2 mockup). The pill is a
+            typographic mark, not a link, purely identifying this as
+            the SE-facing surface. */}
         <Link
           to="/"
           className="flex items-center gap-3 rounded-md -mx-1 px-1 py-1 hover:bg-white/[0.03] transition-colors"
@@ -269,16 +303,14 @@ function TopBar({
           >
             <Logo size={22} />
           </span>
-          <span className="flex flex-col leading-tight">
-            <span className="text-[16px] font-semibold tracking-tight text-[var(--color-text)]">
-              Proj-Clarion
-            </span>
-            <span className="brand-sub-badge hidden sm:inline-flex mt-0.5 w-fit">
-              SE Console
-            </span>
+          <span className="text-[16px] font-semibold tracking-tight text-[var(--color-text)]">
+            Proj-Clarion
+          </span>
+          <span className="brand-tag hidden sm:inline-flex" aria-hidden="true">
+            SE Console
           </span>
         </Link>
-        {/* Primary nav — hidden on mobile (replaced by overflow menu in
+        {/* Primary nav, hidden on mobile (replaced by overflow menu in
             future iteration; for now the command palette ⌘K covers it). */}
         <nav
           aria-label="Primary"
@@ -306,7 +338,7 @@ function TopBar({
         </nav>
         <div className="ml-auto flex items-center gap-2 sm:gap-3 text-xs text-[var(--color-text-muted)]">
           <PipelineLiveCluster />
-          {/* Mode chip — inline label paired with a mono value, mirroring
+          {/* Mode chip, inline label paired with a mono value, mirroring
               how Grafana panels render unit/value pairs. The accent
               token cascades through the value so an `alloy`-mode Clarion
               reads as "primary" even at a glance. */}
@@ -340,7 +372,7 @@ function TopBar({
               <span>⌘</span><span>K</span>
             </kbd>
           </button>
-          {/* User menu — identity, theme toggle, Settings, Sign out.
+          {/* User menu, identity, theme toggle, Settings, Sign out.
               Lives at the rightmost edge of the TopBar so it's always
               in the same spot regardless of viewport width. */}
           <UserMenu />

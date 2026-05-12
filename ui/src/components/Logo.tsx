@@ -2,28 +2,28 @@
  * Proj-Clarion mark.
  *
  * Same SVG as `/public/favicon.svg` but inlined as a React component so
- * the TopBar (and any future surface — login screen, OG image fallback,
+ * the TopBar (and any future surface, login screen, OG image fallback,
  * empty-state hero) can render it without an extra HTTP request and can
  * size/colour it via props.
  *
  * The mark says "signal radiating from a source": an origin dot with
  * three concentric arcs opening rightward. Reads as a clarion call,
- * a Wi-Fi signal, or a heartbeat ping — all of which fit Proj-Clarion's
+ * a Wi-Fi signal, or a heartbeat ping, all of which fit Proj-Clarion's
  * job of broadcasting customer-shaped telemetry into Grafana Cloud.
  *
  * Set `monochrome` when you want the mark to inherit the surrounding
- * text colour (e.g. inside a button) — the orange highlight gets
+ * text colour (e.g. inside a button), the orange highlight gets
  * dropped in that mode for a cleaner glyph.
  *
  * Colour palette (Signal direction):
- *   - `currentColor`        — origin dot + middle + outer arc. Inherits from
+ *   - `currentColor`, origin dot + middle + outer arc. Inherits from
  *                             the parent's `color` (typically
  *                             `var(--color-accent)`) so the mark tracks the
- *                             theme — teal `#2dd4bf` on dark, deeper teal
+ *                             theme, teal `#2dd4bf` on dark, deeper teal
  *                             `#0d9488` on light. The wrapping brand tile
  *                             in Layout.tsx sets `color: var(--color-accent)`.
- *   - `#FF8833` (orange)    — inner-arc highlight (drops in monochrome).
- *                             Grafana brand — stays fixed across themes.
+ *   - `#FF8833` (orange), inner-arc highlight (drops in monochrome).
+ *                             Grafana brand, stays fixed across themes.
  */
 import { useMemo } from "react";
 
@@ -68,12 +68,12 @@ export function Logo({ size = 24, monochrome = false, className, title }: LogoPr
         </defs>
       )}
       {!monochrome && <circle cx="11" cy="16" r="14" fill={`url(#${id})`} />}
-      {/* Origin dot — inherits accent via currentColor */}
+      {/* Origin dot, inherits accent via currentColor */}
       <circle
         cx="10" cy="16" r="2.4"
         fill="currentColor"
       />
-      {/* Inner arc — Grafana orange highlight (drops in monochrome mode) */}
+      {/* Inner arc, Grafana orange highlight (drops in monochrome mode) */}
       <path
         d="M 13.5 12.6 A 4 4 0 0 1 13.5 19.4"
         stroke={monochrome ? "currentColor" : "#FF8833"}

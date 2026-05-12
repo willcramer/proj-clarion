@@ -16,7 +16,7 @@ const BASE = "/api";
  */
 export class SetupRequiredError extends Error {
   constructor() {
-    super("Clarion setup is required — visit /setup");
+    super("Clarion setup is required, visit /setup");
     this.name = "SetupRequiredError";
   }
 }
@@ -286,13 +286,18 @@ export interface PipelineSummary {
   status: "running" | "done" | "failed" | "cancelled";
   error: string | null;
   event_count: number;
-  // Resume metadata — null when this build started from research.
+  // Resume metadata, null when this build started from research.
   trigger?: "full" | "phase";
   starting_phase?: PipelinePhase | null;
   parent_pipeline_id?: string | null;
   // Linked artifacts produced by this build (set as phases complete).
   profile_id?: string | null;
   plan_id?: string | null;
+  // Phase rollup, server-derived from pipeline_phases. The Builds list
+  // renders these as a per-row progress bar (phases_done / 6) plus the
+  // active phase name on running rows.
+  phases_done?: number;
+  current_phase?: PipelinePhase | null;
 }
 
 export interface PipelinePhaseRow {
@@ -304,7 +309,7 @@ export interface PipelinePhaseRow {
   artifact: { profile_id?: string; plan_id?: string } | null;
 }
 
-/** Start a pipeline server-side. Returns its ID immediately — orchestrator
+/** Start a pipeline server-side. Returns its ID immediately, orchestrator
  *  runs as a background task on the API process. Use streamPipeline(id)
  *  to follow it (works even if the user navigates away and comes back).
  *
@@ -312,7 +317,15 @@ export interface PipelinePhaseRow {
  *  (default auto-scales 1.5K-5K/day by channel count). 500 = quick
  *  smoke build, 25K+ = stress test. Range [100, 100000]. */
 export async function createPipeline(
-  body: { url: string; company?: string; days?: number; volume_per_day?: number },
+  body: {
+    url: string;
+    company?: string;
+    days?: number;
+    volume_per_day?: number;
+    /** Optional cut-off, orchestrator stops after this phase succeeds.
+     *  Use "research" for the "Just add profile" flow on Profiles. */
+    stop_after_phase?: PipelinePhase;
+  },
 ): Promise<PipelineSummary> {
   return request<PipelineSummary>("/pipelines/run", {
     method: "POST",
@@ -355,10 +368,116 @@ export const getPipelineEvents = (id: string) =>
 export const cancelPipeline = (id: string) =>
   request<{ cancelled: boolean }>(`/pipelines/${id}/cancel`, { method: "POST" });
 
+// ─── Demo sessions (live emitter) ──────────────────────────────────
+//
+// One active session per plan. The dashboard's Live demo card lists
+// every active session across all plans via /api/demo/sessions; the
+// per-plan controls (start/stop/extend) on Plans-detail use the
+// existing /api/demo/{status,start,stop,extend} routes.
+
+export interface DemoSession {
+  session_id: number;
+  plan_id: string;
+  pid: number | null;
+  status: "starting" | "live" | "stopped" | "expired" | "crashed";
+  started_at: string | null;
+  expires_at: string;
+  last_heartbeat_at: string | null;
+  seconds_since_heartbeat: number | null;
+  seconds_until_expiry: number;
+  health: "starting" | "live" | "stale";
+  /** Profile source_url for the plan's company. */
+  url: string | null;
+  /** Optional friendly company name pulled from the profile JSON. */
+  company: string | null;
+}
+
+export const listDemoSessions = () =>
+  request<{ sessions: DemoSession[] }>("/demo/sessions").then((r) => r.sessions);
+
+export interface DemoHistoryRow {
+  session_id: number;
+  plan_id: string;
+  pid: number | null;
+  status: "starting" | "live" | "stopped" | "expired" | "crashed";
+  started_at: string | null;
+  finished_at: string | null;
+  expires_at: string | null;
+  /** Server-derived duration. For in-flight rows this is "now - started_at"
+   *  at fetch time; for terminal rows it's "finished_at - started_at". */
+  seconds_active: number | null;
+  url: string | null;
+  company: string | null;
+  notes: string | null;
+}
+
+export interface DemoHistoryResponse {
+  history: DemoHistoryRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Audit log of demo sessions, newest first. Pass `plan_id` to scope
+ *  to a single plan (used by the per-plan history strip on Plans-detail). */
+export const listDemoHistory = (params?: {
+  limit?: number;
+  offset?: number;
+  plan_id?: string;
+}) => {
+  const q = new URLSearchParams();
+  if (params?.limit !== undefined)  q.set("limit",  String(params.limit));
+  if (params?.offset !== undefined) q.set("offset", String(params.offset));
+  if (params?.plan_id)              q.set("plan_id", params.plan_id);
+  const qs = q.toString();
+  return request<DemoHistoryResponse>(`/demo/history${qs ? "?" + qs : ""}`);
+};
+
+// ─── Plan audit (global) ────────────────────────────────────────────
+
+export interface GlobalAuditEntry {
+  timestamp: string;
+  plan_id: string | null;
+  actor: string;
+  action: string;
+  from_state: string | null;
+  to_state: string | null;
+  note: string | null;
+  url: string | null;
+  company: string | null;
+}
+
+export interface GlobalAuditResponse {
+  entries: GlobalAuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export const listPlanAudit = (params?: { limit?: number; offset?: number }) => {
+  const q = new URLSearchParams();
+  if (params?.limit !== undefined)  q.set("limit",  String(params.limit));
+  if (params?.offset !== undefined) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  return request<GlobalAuditResponse>(`/plans/audit${qs ? "?" + qs : ""}`);
+};
+
+export const stopDemoSession = (plan_id: string) =>
+  request<{ ok: boolean; stopped: boolean; pid: number | null }>(
+    "/demo/stop",
+    { method: "POST", body: JSON.stringify({ plan_id }) },
+  );
+
+export const extendDemoSession = (plan_id: string, additional_hours = 1) =>
+  request<{ ok: boolean; expires_at: string }>(
+    "/demo/extend",
+    { method: "POST", body: JSON.stringify({ plan_id, additional_hours }) },
+  );
+
 /** Connect to a pipeline's SSE stream. Replays from the beginning, then
  *  tails. Returns a function to close the connection.
  *
- *  Survives tab switches, page navigations, even browser reloads — events
+ *  Survives tab switches, page navigations, even browser reloads, events
  *  are buffered server-side, so reconnecting picks up from event 0. */
 export function streamPipeline(
   pipeline_id: string,
@@ -371,7 +490,7 @@ export function streamPipeline(
   // ourselves. Otherwise: the server's stream_pipeline returns after
   // sending pipeline:done|failed|cancelled, the connection drops, and
   // browser EventSource silently auto-reconnects. The new connection
-  // hits the same endpoint which replays every event from seq 0 — and
+  // hits the same endpoint which replays every event from seq 0, and
   // the client appends them all to its log buffer again. That's how
   // a 1700-line failed pipeline turned into 3888 lines five seconds
   // later. `terminated` is a one-way latch: once flipped, no further

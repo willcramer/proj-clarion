@@ -1,5 +1,5 @@
 /**
- * PipelineStepper — replaces the old text "3/6 phases" indicator with
+ * PipelineStepper, replaces the old text "3/6 phases" indicator with
  * a horizontal visual stepper that shows, at a glance:
  *
  *   • The numbered ordering (1·Research → 2·Plan → ... → 6·KG publish)
@@ -8,7 +8,7 @@
  *     connector line's tint between this step and the next.
  *   • Per-phase duration on completed steps (or live wall-clock for
  *     the active one), log line count, and error count.
- *   • A vertical-stack fallback for narrow viewports — sm: hidden on
+ *   • A vertical-stack fallback for narrow viewports, sm: hidden on
  *     desktop, replaces the horizontal stepper on mobile so the same
  *     info stays visible without horizontal-scroll jank.
  *
@@ -83,7 +83,7 @@ export type PipelineStepperProps = {
   phases: Record<PipelinePhase, PhaseState>;
   /** Per-phase computed metrics (duration / errors / log count). */
   metrics?: PhaseMetric[];
-  /** Click handler — caller decides whether to scroll to the phase log,
+  /** Click handler, caller decides whether to scroll to the phase log,
    *  open a rerun modal, or anything else. */
   onStepClick?: (phase: PipelinePhase) => void;
   /** When set, this phase gets the `aria-current="step"` marker. */
@@ -103,7 +103,7 @@ export function PipelineStepper({
       role="list"
       aria-label="Pipeline progress"
       // Horizontal stepper on >=md, vertical on <md. Both render the
-      // same data; only layout changes — keeps the DOM small enough for
+      // same data; only layout changes, keeps the DOM small enough for
       // server-paint and keeps a single source of truth.
       className="space-y-3"
     >
@@ -185,7 +185,7 @@ function Step({
           interactive && "hover:bg-white/[0.03] cursor-pointer",
           focused && "bg-white/[0.04]",
         )}
-        aria-label={`Phase ${index}: ${PHASE_LABELS[phase]} — ${status}`}
+        aria-label={`Phase ${index}: ${PHASE_LABELS[phase]}, ${status}`}
       >
         <span
           className={cn(
@@ -241,7 +241,7 @@ function StepRow({
       type="button"
       disabled={!interactive}
       onClick={() => interactive && onClick?.(phase)}
-      aria-label={`Phase ${index}: ${PHASE_LABELS[phase]} — ${status}`}
+      aria-label={`Phase ${index}: ${PHASE_LABELS[phase]}, ${status}`}
       className={cn(
         "w-full flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors text-left",
         "border-[var(--color-border)] bg-[var(--color-canvas-elev1)]",
