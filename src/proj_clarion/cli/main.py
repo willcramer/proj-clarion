@@ -646,8 +646,15 @@ def _run_doctor_after_emit_start(plan_id: str, customer: str | None, wait_second
               help="Auto-run the KG health check ~75s after starting the emitter "
                    "(one full export cycle + Mimir ingest). Logs failures loudly. "
                    "Use --no-doctor for fast iteration.")
+@click.option("--max-entities", type=int, default=None,
+              help="Cap the number of entities the emitter materialises in "
+                   "Asserts. Tier-priority trim: business entities + clusters + "
+                   "nodes are kept; pods are cut first. Useful when a KG with "
+                   "100+ pods crowds the entity-graph view for a live demo. "
+                   "Defaults to no cap (or CLARION_MAX_ENTITIES env var).")
 def kg_publish(plan_id: str, push_rules: bool, emit: bool,
-               customer: str | None, env: str | None, site: str, doctor: bool) -> None:
+               customer: str | None, env: str | None, site: str, doctor: bool,
+               max_entities: int | None) -> None:
     """Push KG model-rules + prom-rules to Cloud; emit entity gauges."""
     import subprocess
 
@@ -735,7 +742,11 @@ def kg_publish(plan_id: str, push_rules: bool, emit: bool,
         f"emits clarion_entity_info every 30s; ctrl-C to stop.",
         border_style="cyan",
     ))
-    emitter = EntityEmitter(plan, expanded, customer=customer, env=env, site=site)
+    emitter = EntityEmitter(
+        plan, expanded,
+        customer=customer, env=env, site=site,
+        max_entities=max_entities,
+    )
     emitter.start()
 
     # Schedule the post-start health check. 75s gives the periodic

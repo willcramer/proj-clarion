@@ -197,6 +197,21 @@ def _build_store_cluster(
         edge_seq[0] += 1
         return f"edge-{edge_seq[0]:04d}"
 
+    # Business-line slug derived from the store. Propagates downward to
+    # the cluster + nodes + pods + ancillary infra so every entity in
+    # this store's footprint carries `clarion_business_line=<store>`
+    # at emit time — lets the SE filter the Asserts entity graph to a
+    # single retail outlet during a demo.
+    bl = _business_line_slug(store)
+    if bl and "business_line" not in store.attributes:
+        store.attributes["business_line"] = bl
+
+    def _maybe_bl(d: dict) -> dict:
+        """Helper — append business_line iff the store has one."""
+        if bl:
+            d["business_line"] = bl
+        return d
+
     # Per-store cluster (built-in KubeCluster type).
     cluster_id = f"cluster-{store_slug}"
     nodes.append(KGNode(
@@ -204,10 +219,10 @@ def _build_store_cluster(
         node_type=NodeType.TECHNICAL_RESOURCE,
         technical_subtype="cluster",
         label=f"{store.label} cluster",
-        attributes={
+        attributes=_maybe_bl({
             "store_id": store.node_id,
             "kind": "kubecluster",
-        },
+        }),
     ))
     edges.append(KGEdge(
         edge_id=_next_edge(),
@@ -223,10 +238,10 @@ def _build_store_cluster(
             node_type=NodeType.TECHNICAL_RESOURCE,
             technical_subtype="namespace",
             label=ns_purpose,
-            attributes={
+            attributes=_maybe_bl({
                 "cluster_id": cluster_id,
                 "store_id": store.node_id,
-            },
+            }),
         ))
         edges.append(KGEdge(
             edge_id=_next_edge(),
@@ -243,13 +258,13 @@ def _build_store_cluster(
             node_type=NodeType.TECHNICAL_RESOURCE,
             technical_subtype="deployment",
             label=f"{store.label} node-{i+1}",
-            attributes={
+            attributes=_maybe_bl({
                 "kind": "kubenode",
                 "cluster_id": cluster_id,
                 "store_id": store.node_id,
                 "instance_type": rng.choice(["m6i.xlarge", "c6i.xlarge"]),
                 "node_index": i + 1,
-            },
+            }),
         ))
         edges.append(KGEdge(
             edge_id=_next_edge(),
@@ -266,12 +281,12 @@ def _build_store_cluster(
             node_type=NodeType.TECHNICAL_RESOURCE,
             technical_subtype="service",
             label=svc_name,
-            attributes={
+            attributes=_maybe_bl({
                 "cluster_id": cluster_id,
                 "store_id": store.node_id,
                 "namespace_id": f"ns-{store_slug}-commerce",
                 "edge_service": True,
-            },
+            }),
         ))
         edges.append(KGEdge(
             edge_id=_next_edge(),
@@ -287,7 +302,7 @@ def _build_store_cluster(
                 node_type=NodeType.TECHNICAL_RESOURCE,
                 technical_subtype="deployment",
                 label=f"{svc_name}-{i}",
-                attributes={
+                attributes=_maybe_bl({
                     "kind": "pod",
                     "service_id": svc_id,
                     "namespace_id": f"ns-{store_slug}-commerce",
@@ -296,7 +311,7 @@ def _build_store_cluster(
                     "image": f"clarion/{svc_name}:edge",
                     "replicas_total": n_pods,
                     "replica_index": i,
-                },
+                }),
             ))
             edges.append(KGEdge(
                 edge_id=_next_edge(),
@@ -311,11 +326,11 @@ def _build_store_cluster(
         node_type=NodeType.TECHNICAL_RESOURCE,
         technical_subtype="external_dependency",
         label=f"{store.label} ALB",
-        attributes={
+        attributes=_maybe_bl({
             "kind": "loadbalancer",
             "cluster_id": cluster_id,
             "store_id": store.node_id,
-        },
+        }),
     ))
     edges.append(KGEdge(
         edge_id=_next_edge(),
@@ -330,12 +345,12 @@ def _build_store_cluster(
         node_type=NodeType.TECHNICAL_RESOURCE,
         technical_subtype="database",
         label=f"{store.label} local DB",
-        attributes={
+        attributes=_maybe_bl({
             "kind": "database",
             "engine": "postgres",
             "store_id": store.node_id,
             "cluster_id": cluster_id,
-        },
+        }),
     ))
     edges.append(KGEdge(
         edge_id=_next_edge(),
@@ -350,11 +365,11 @@ def _build_store_cluster(
         node_type=NodeType.TECHNICAL_RESOURCE,
         technical_subtype="queue",
         label=f"{store_slug}-events",
-        attributes={
+        attributes=_maybe_bl({
             "kind": "topic",
             "store_id": store.node_id,
             "broker": "kafka",
-        },
+        }),
     ))
     edges.append(KGEdge(
         edge_id=_next_edge(),
@@ -507,6 +522,31 @@ def _pick_cluster_anchors(
     return anchors, synth
 
 
+def _business_line_slug(anchor: KGNode) -> str | None:
+    """Derive a "business line" slug from an anchor entity, or None.
+
+    The business_line attribute powers the new `clarion_business_line`
+    metric label, which lets an SE filter the Asserts entity graph to a
+    single line of business during a demo (e.g. show only Securiti, not
+    the whole Veeam KG).
+
+    Only `business_unit` and `brand` count as business lines. Regions,
+    channels, and partner programs span too broadly. Stores get one too
+    when there's no parent BU/brand — a single retail outlet is the
+    finest natural slice for retail demos.
+
+    The slug strips the type prefix (`bu-`, `brand-`, `store-`) so the
+    label value reads as "securiti" rather than "bu-securiti".
+    """
+    if anchor.business_subtype not in ("business_unit", "brand", "store"):
+        return None
+    nid = anchor.node_id
+    for pre in ("bu-", "brand-", "store-"):
+        if nid.startswith(pre):
+            return nid[len(pre):]
+    return nid
+
+
 def _build_cluster_at_anchor(
     anchor: KGNode,
     *,
@@ -551,18 +591,29 @@ def _build_cluster_at_anchor(
     if "cluster_id" not in anchor.attributes:
         anchor.attributes["cluster_id"] = cluster_id
 
+    # Business-line slug derived from the anchor — propagates to the
+    # cluster + every node + every pod underneath, so the SE can filter
+    # the Asserts entity graph to a single business line at demo time.
+    bl = _business_line_slug(anchor)
+    if bl and "business_line" not in anchor.attributes:
+        anchor.attributes["business_line"] = bl
+
+    cluster_attrs: dict[str, object] = {
+        "kind":               "kubecluster",
+        "anchor_id":          anchor.node_id,
+        "anchor_subtype":     anchor.business_subtype or "",
+        "synthetic":          True,
+        "source":             "kube_quota",
+    }
+    if bl:
+        cluster_attrs["business_line"] = bl
+
     nodes.append(KGNode(
         node_id=cluster_id,
         node_type=NodeType.TECHNICAL_RESOURCE,
         technical_subtype="cluster",
         label=f"{anchor.label} cluster",
-        attributes={
-            "kind":               "kubecluster",
-            "anchor_id":          anchor.node_id,
-            "anchor_subtype":     anchor.business_subtype or "",
-            "synthetic":          True,
-            "source":             "kube_quota",
-        },
+        attributes=cluster_attrs,
     ))
     # anchor RUNS_ON cluster — matches existing store→cluster shape so
     # `_compute_store_cluster_map` and built-in entity rules pick this up.
@@ -577,20 +628,23 @@ def _build_cluster_at_anchor(
     # via PROPERTY_MATCH on `node` ↔ `clarion_node_id`.
     for i in range(NODES_PER_CLUSTER):
         node_id = f"node-{anchor_slug}-{i+1}"
+        kube_node_attrs: dict[str, object] = {
+            "kind":          "kubenode",
+            "cluster_id":    cluster_id,
+            "anchor_id":     anchor.node_id,
+            "instance_type": "m6i.xlarge",
+            "node_index":    i + 1,
+            "synthetic":     True,
+            "source":        "kube_quota",
+        }
+        if bl:
+            kube_node_attrs["business_line"] = bl
         nodes.append(KGNode(
             node_id=node_id,
             node_type=NodeType.TECHNICAL_RESOURCE,
             technical_subtype="deployment",
             label=f"{anchor.label} node-{i+1}",
-            attributes={
-                "kind":          "kubenode",
-                "cluster_id":    cluster_id,
-                "anchor_id":     anchor.node_id,
-                "instance_type": "m6i.xlarge",
-                "node_index":    i + 1,
-                "synthetic":     True,
-                "source":        "kube_quota",
-            },
+            attributes=kube_node_attrs,
         ))
         edges.append(KGEdge(
             edge_id=_next_edge(),
@@ -700,21 +754,29 @@ def _ensure_pod_quota_per_cluster(
                 pod_ns = ns_id
 
             pod_id = f"pod-{anchor_slug}-{svc_slug}-q{existing + i}"
+            pod_attrs: dict[str, object] = {
+                "kind":          "pod",
+                "service_id":    svc_id,
+                "namespace_id":  pod_ns or "",
+                "cluster_id":    cluster_id,
+                "anchor_id":     anchor_id,
+                "image":         f"clarion/{svc_slug}:1.0.0",
+                "synthetic":     True,
+                "source":        "kube_quota",
+            }
+            # Inherit business_line from the cluster — if this cluster
+            # anchors at a BU/Brand/Store, every pod on it carries that
+            # business-line label, so the Asserts entity-graph filter
+            # narrows cleanly to one demo slice.
+            cluster_bl = cluster.attributes.get("business_line", "")
+            if cluster_bl:
+                pod_attrs["business_line"] = cluster_bl
             new_nodes.append(KGNode(
                 node_id=pod_id,
                 node_type=NodeType.TECHNICAL_RESOURCE,
                 technical_subtype="deployment",
                 label=f"{svc_slug}-{existing + i}",
-                attributes={
-                    "kind":          "pod",
-                    "service_id":    svc_id,
-                    "namespace_id": pod_ns or "",
-                    "cluster_id":    cluster_id,
-                    "anchor_id":     anchor_id,
-                    "image":         f"clarion/{svc_slug}:1.0.0",
-                    "synthetic":     True,
-                    "source":        "kube_quota",
-                },
+                attributes=pod_attrs,
             ))
             # Service CONTAINS Pod — fires the Service↔Pod KG join when
             # the pod's `clarion_service_id` label matches the service's
@@ -873,22 +935,28 @@ def _ensure_node_quota_per_cluster(
         if n_needed == 0:
             continue
         anchor_slug = cid.removeprefix("cluster-") or cid
+        # Inherit business_line from the cluster so top-up nodes carry
+        # the same demo-filter label as the rest of the cluster.
+        cluster_bl = cluster.attributes.get("business_line", "")
         start_idx = len(existing) + 1
         for i in range(n_needed):
             node_id = f"node-{anchor_slug}-{start_idx + i}"
+            attrs: dict[str, object] = {
+                "kind":          "kubenode",
+                "cluster_id":    cid,
+                "instance_type": "m6i.xlarge",
+                "node_index":    start_idx + i,
+                "synthetic":     True,
+                "source":        "kube_quota",
+            }
+            if cluster_bl:
+                attrs["business_line"] = cluster_bl
             new_nodes.append(KGNode(
                 node_id=node_id,
                 node_type=NodeType.TECHNICAL_RESOURCE,
                 technical_subtype="deployment",
                 label=f"{cluster.label} node-{start_idx + i}",
-                attributes={
-                    "kind":          "kubenode",
-                    "cluster_id":    cid,
-                    "instance_type": "m6i.xlarge",
-                    "node_index":    start_idx + i,
-                    "synthetic":     True,
-                    "source":        "kube_quota",
-                },
+                attributes=attrs,
             ))
             new_edges.append(KGEdge(
                 edge_id=_next_edge(),
@@ -914,6 +982,17 @@ def expand_with_synthetic_infra(
 
     new_nodes: list[KGNode] = list(original.nodes)
     new_edges: list[KGEdge] = list(original.edges)
+
+    # ── 0. Stamp business_line on every planner-emitted BU / Brand /
+    # Store entity. This is the source of truth that flows downward
+    # through `_build_cluster_at_anchor` / `_ensure_node_quota_per_cluster`
+    # / `_ensure_pod_quota_per_cluster` — so cluster → node → pod all
+    # carry the same `business_line` slug at emit time, and the Asserts
+    # `clarion_business_line` filter narrows cleanly to one demo slice.
+    for n in new_nodes:
+        bl = _business_line_slug(n)
+        if bl and "business_line" not in n.attributes:
+            n.attributes["business_line"] = bl
 
     # ── 1. Synthesize additional stores up to min_stores ──
     extra_store_nodes, extra_store_edges = _synthesize_extra_stores(

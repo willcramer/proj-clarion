@@ -70,9 +70,19 @@ async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
 }
 const demoApiCalls = {
   status: (planId: string) => demoApi<DemoStatus>(`/status?plan_id=${encodeURIComponent(planId)}`),
-  start:  (planId: string, hours: number) =>
+  start:  (planId: string, hours: number, maxEntities: number | null) =>
     demoApi<{ ok: boolean; session_id: number; pid: number; expires_at: string }>(
-      "/start", { method: "POST", body: JSON.stringify({ plan_id: planId, duration_hours: hours }) },
+      "/start",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          plan_id: planId,
+          duration_hours: hours,
+          // `max_entities` left null = no cap (backend default). Only
+          // sent when the SE has picked a value.
+          ...(maxEntities ? { max_entities: maxEntities } : {}),
+        }),
+      },
     ),
   stop:   (planId: string) =>
     demoApi<{ ok: boolean; stopped: boolean; pid: number | null }>(
@@ -91,6 +101,10 @@ export function DemoSessionCard({ planId }: { planId: string }) {
   const [busy, setBusy] = useState<"start" | "stop" | "extend" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [durationHours, setDurationHours] = useState(2);
+  // Optional entity cap. `null` = let the backend emit the full KG;
+  // a number trims to that many entities (tier-priority, pods cut first)
+  // so the Asserts entity-graph view stays readable for a live demo.
+  const [maxEntities, setMaxEntities] = useState<number | null>(null);
 
   async function refresh() {
     try {
@@ -114,7 +128,7 @@ export function DemoSessionCard({ planId }: { planId: string }) {
   async function onStart() {
     setBusy("start"); setErr(null);
     try {
-      await demoApiCalls.start(planId, durationHours);
+      await demoApiCalls.start(planId, durationHours, maxEntities);
       // Poll faster right after start so the "starting → live" transition
       // shows up snappily.
       void refresh();
@@ -169,6 +183,8 @@ export function DemoSessionCard({ planId }: { planId: string }) {
         <IdleView
           durationHours={durationHours}
           onDurationChange={setDurationHours}
+          maxEntities={maxEntities}
+          onMaxEntitiesChange={setMaxEntities}
           busy={busy}
           onStart={onStart}
         />
@@ -187,10 +203,14 @@ export function DemoSessionCard({ planId }: { planId: string }) {
 // ─── Idle (no active session) ─────────────────────────────────────
 
 function IdleView({
-  durationHours, onDurationChange, busy, onStart,
+  durationHours, onDurationChange,
+  maxEntities, onMaxEntitiesChange,
+  busy, onStart,
 }: {
   durationHours: number;
   onDurationChange: (h: number) => void;
+  maxEntities: number | null;
+  onMaxEntitiesChange: (n: number | null) => void;
   busy: "start" | "stop" | "extend" | null;
   onStart: () => void;
 }) {
@@ -236,6 +256,44 @@ function IdleView({
           {busy === "start" ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />}
           {busy === "start" ? "Starting…" : "Start demo"}
         </Button>
+      </div>
+      {/* Entity cap — optional. Lets the SE narrow the Asserts entity-graph
+          view to a manageable size for a live demo. Picking a preset overrides
+          "no cap"; "All" goes back to emitting the full KG. Tier priority:
+          business entities + clusters + nodes kept first; pods cut first. */}
+      <div>
+        <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-faint)] mb-1">
+          Max entities (KG view)
+        </label>
+        <div className="flex items-center gap-2 flex-wrap">
+          {[
+            { value: null,  label: "All" },
+            { value: 30,    label: "30" },
+            { value: 60,    label: "60" },
+            { value: 120,   label: "120" },
+            { value: 250,   label: "250" },
+          ].map((opt) => (
+            <button
+              key={String(opt.value)}
+              type="button"
+              onClick={() => onMaxEntitiesChange(opt.value)}
+              aria-pressed={maxEntities === opt.value}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-xs font-medium transition-colors border",
+                maxEntities === opt.value
+                  ? "border-[var(--color-accent-border)] bg-[var(--color-accent-bg)] text-[var(--color-accent)]"
+                  : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)]",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-[var(--color-text-faint)] mt-1">
+          Trims pods first; keeps business entities + clusters + nodes. Use
+          <code className="mx-1">clarion_business_line</code> in the Asserts
+          filter to scope further (one BU/Brand/Store at a time).
+        </p>
       </div>
     </div>
   );

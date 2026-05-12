@@ -57,6 +57,17 @@ class StartRequest(BaseModel):
         ge=0.25, le=MAX_TOTAL_HOURS,
         description="How long to keep the emitter alive before auto-stop. Default 2h.",
     )
+    max_entities: int | None = Field(
+        default=None,
+        ge=1, le=10_000,
+        description=(
+            "Optional cap on the number of entities the emitter materialises "
+            "in Asserts. Tier-priority trim: business entities + clusters + "
+            "nodes are kept, pods are cut first. Use when the full KG (often "
+            "100+ pods) crowds the entity-graph view for a live demo. Empty "
+            "means no cap."
+        ),
+    )
 
 
 class StopRequest(BaseModel):
@@ -180,6 +191,8 @@ def post_start(body: StartRequest) -> dict[str, Any]:
             "kg", "publish", str(full_id),
             "--no-push-rules", "--no-doctor", "--emit",
         ]
+        if body.max_entities is not None:
+            argv += ["--max-entities", str(body.max_entities)]
         # detach from the API's process group so signals to uvicorn
         # don't bubble down to the emitter (e.g. dev `--reload`).
         # Use `start_new_session=True` instead of preexec_fn on macOS

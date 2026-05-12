@@ -257,6 +257,17 @@ def _observation_attrs(
     if site:
         attrs["asserts_site"] = site
 
+    # Business-line scoping for demos. Entities anchored at (or
+    # descending from) a BusinessUnit / Brand / Store carry this label
+    # so the Asserts entity graph filter can narrow to a single line of
+    # business without losing the full-customer view. See
+    # `expand._business_line_slug` for the source of truth — only
+    # BU / Brand / Store anchors flow this attribute downward; regions
+    # and cloud-regions are too broad to count as "lines".
+    business_line = (node.attributes.get("business_line") or "").strip()
+    if business_line:
+        attrs["clarion_business_line"] = business_line
+
     # Per-subtype identity
     if node.node_type == NodeType.BUSINESS_ENTITY and node.business_subtype:
         attrs[f"clarion_{node.business_subtype}_id"] = node.node_id
@@ -371,6 +382,7 @@ class EntityEmitter:
         site: str = "demo",
         export_interval_seconds: int = 30,
         emit_red: bool = True,
+        max_entities: int | None = None,
     ) -> None:
         self._plan_id = str(plan.plan_id)
         self._kg = kg
@@ -385,6 +397,19 @@ class EntityEmitter:
         self._export_interval_ms = export_interval_seconds * 1000
         self._provider: MeterProvider | None = None
         self._stopping = False
+        # Entity cap. KGs with 100+ pods make the Asserts entity-graph
+        # view crowded for a live demo. When `max_entities` is set we
+        # trim the observed set in tier-priority order
+        # (Account / Cloud / business entities first; pods last) so
+        # the SE sees the most important entities and the graph stays
+        # readable. Resolution order:
+        #   1. constructor arg (--max-entities CLI flag, /api/demo/start)
+        #   2. CLARION_MAX_ENTITIES env var
+        #   3. None ⇒ no cap (emit everything)
+        env_max = (os.environ.get("CLARION_MAX_ENTITIES") or "").strip()
+        if max_entities is None and env_max.isdigit():
+            max_entities = int(env_max)
+        self._max_entities = max_entities if max_entities and max_entities > 0 else None
         # Walk hierarchy NOW so RedEmitter sees the parent IDs on stores/FCs
         _attach_hierarchy(kg)
         # Pin every Pod to a Node in its cluster so the built-in
@@ -490,6 +515,54 @@ class EntityEmitter:
         except Exception:  # noqa: BLE001 — see docstring
             pass
 
+    # Tier priority used by `_trim_to_cap`. Lower number = kept first.
+    # Account / customer-wide business entities are most useful for
+    # narrating a demo; pods are densest and the first thing to cut.
+    _TIER_PRIORITY: dict[str, int] = {
+        # Business tier — keep all of these in any reasonable cap
+        "region":               10,
+        "channel":              11,
+        "business_unit":        12,
+        "brand":                13,
+        "product_line":         14,
+        "partner_program":      15,
+        "fulfillment_center":   16,
+        "store":                17,
+        # Tech tier — clusters / nodes / namespaces tell the story
+        "kubecluster":          20,
+        "cluster":              20,
+        "namespace":            21,
+        "kubenode":             22,
+        # Services / Databases / Topics / LBs — keep before pods
+        "service":              30,
+        "database":             31,
+        "topic":                32,
+        "loadbalancer":         33,
+        "vm":                   34,
+        # Pods last — there can be 50-100 of these; cap them first
+        "pod":                  50,
+    }
+
+    def _node_priority(self, node: KGNode) -> int:
+        """Sort key for tier-priority trimming."""
+        if node.business_subtype:
+            return self._TIER_PRIORITY.get(node.business_subtype, 100)
+        kind = node.attributes.get("kind") or node.technical_subtype or ""
+        return self._TIER_PRIORITY.get(kind, 100)
+
+    def _trim_to_cap(self, nodes: list[KGNode]) -> list[KGNode]:
+        """Apply `self._max_entities` cap. Returns a tier-priority-sorted
+        subset; ties broken by node_id for stability across re-emits.
+
+        When the cap is `None` (or 0, or ≥ node count) returns the full
+        list unchanged — no allocation overhead in the common case.
+        """
+        if self._max_entities is None or len(nodes) <= self._max_entities:
+            return nodes
+        return sorted(nodes, key=lambda n: (self._node_priority(n), n.node_id))[
+            : self._max_entities
+        ]
+
     def _emit_all(self, _options: Any) -> list[Observation]:
         """One Observation per KG entity, except Stores/FCs which fan out
         across the services in their per-store cluster.
@@ -504,8 +577,14 @@ class EntityEmitter:
         # `_heartbeat` for why this can't throw.
         self._heartbeat()
 
+        # Apply the user-controllable entity cap before emitting. The
+        # full KG still exists for relations / cross-references, but the
+        # `clarion_entity_info` gauge only materialises the top-N
+        # entities so the Asserts entity-graph view stays readable.
+        nodes = self._trim_to_cap(self._kg.nodes)
+
         out: list[Observation] = []
-        for node in self._kg.nodes:
+        for node in nodes:
             if node.business_subtype in ("store", "fulfillment_center"):
                 out.extend(self._observations_for_store(node))
             else:
