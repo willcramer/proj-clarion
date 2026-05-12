@@ -205,10 +205,16 @@ function Avatar({
   return (
     <span
       aria-hidden="true"
+      // `user-menu-avatar` is a CSS hook (defined in `index.css`) that
+      // paints a teal→sky gradient surface across the circle. The
+      // Tailwind `bg-[...]` class below is a fallback if the rule is
+      // ever scoped away — Tailwind wins specificity tie-breakers via
+      // source order, but the gradient is loaded earlier in the cascade.
       className={cn(
+        "user-menu-avatar",
         "relative inline-flex items-center justify-center font-medium select-none",
         large ? "w-10 h-10 text-sm" : "w-7 h-7 text-[11px]",
-        "rounded-full bg-[var(--color-accent-bg)] text-[var(--color-accent)]",
+        "rounded-full bg-[var(--color-accent-bg)] text-[var(--color-on-accent)]",
         "ring-1 ring-[var(--color-accent-border)]",
       )}
     >

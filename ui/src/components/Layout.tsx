@@ -8,8 +8,6 @@ import {
   Search,
   Sparkles,
   Loader2,
-  CheckCircle2,
-  AlertCircle,
   Menu,
   X,
 } from "lucide-react";
@@ -19,8 +17,9 @@ import { cn } from "@/lib/cn";
 import { getEnv, listPipelines } from "@/lib/api";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Logo } from "@/components/Logo";
+import { PipelineStatusPill } from "@/components/PipelineStatusPill";
 import { UserMenu } from "@/components/UserMenu";
-import { usePipeline, activePhase, phaseProgress } from "@/lib/PipelineContext";
+import { usePipeline } from "@/lib/PipelineContext";
 
 const NAV = [
   { to: "/",          label: "Dashboard", icon: LayoutDashboard },
@@ -127,8 +126,10 @@ function MobileNavDrawer({
         )}
       >
         <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
-          <Link to="/" className="flex items-center gap-2 font-semibold">
-            <Logo size={20} />
+          <Link to="/" className="flex items-center gap-2.5 font-semibold">
+            <span className="brand-tile inline-flex items-center justify-center w-8 h-8 rounded-[8px]" aria-hidden="true">
+              <Logo size={18} />
+            </span>
             <span>Proj-Clarion</span>
           </Link>
           <button
@@ -165,13 +166,18 @@ function MobileNavDrawer({
   );
 }
 
-/** Persistent indicator shown in the top nav whenever a pipeline is alive.
- *  Click jumps back to /new. Now polls the global pipelines list so a
- *  user who's queued multiple builds (start one, click Back, fill the
- *  form, start another) sees a count of all the running ones — not just
- *  whichever the local PipelineContext is currently following.
+/** Topbar live cluster — the headline `PipelineStatusPill` for the
+ *  followed pipeline, plus a small "+N more" sibling when other builds
+ *  are running in parallel (SE queued multiple) so they're discoverable
+ *  without polling /pipelines manually.
+ *
+ *  Layered structure on purpose: the pill is the prominent "what's
+ *  happening right now" cue; the +N is a compact pointer to the list
+ *  view. When there's no followed pipeline at all but builds ARE running
+ *  (the SE just refreshed and the context hasn't latched yet), we fall
+ *  back to a single "N builds running" link to /pipelines.
  */
-function PipelineIndicator() {
+function PipelineLiveCluster() {
   const p = usePipeline();
   // Cheap poll — bounded list size, only used to count running builds.
   const all = useQuery({
@@ -181,10 +187,6 @@ function PipelineIndicator() {
   });
   const runningCount = (all.data ?? []).filter((x) => x.status === "running").length;
 
-  // Three rendering branches:
-  //   1. PipelineContext is following one → show its phase progress
-  //   2. No follow but there ARE running builds → show running count
-  //   3. Nothing in flight at all → render nothing
   const followsActive = p.status !== "idle" && !!p.pipelineId;
   if (!followsActive && runningCount === 0) return null;
 
@@ -195,55 +197,30 @@ function PipelineIndicator() {
       <Link
         to="/pipelines"
         title={`${runningCount} pipeline${runningCount === 1 ? "" : "s"} running — click to view list`}
-        className="flex items-center gap-2 px-2.5 h-7 rounded-md border text-xs transition-all border-[var(--color-info)]/40 text-[var(--color-info)] bg-[var(--color-info)]/10"
+        className="flex items-center gap-2 px-2.5 h-7 rounded-full border text-xs transition-colors border-[color:var(--color-info)]/40 text-[var(--color-info)] bg-[var(--color-info-bg)]"
       >
-        <Loader2 size={12} className="text-[var(--color-info)] animate-spin" />
+        <Loader2 size={12} className="animate-spin" />
         <span className="font-medium">{runningCount} build{runningCount === 1 ? "" : "s"} running</span>
       </Link>
     );
   }
 
-  const { done, total } = phaseProgress(p.phases);
-  const ap = activePhase(p.phases);
-
-  let Icon = Loader2;
-  let iconClass = "text-[var(--color-info)] animate-spin";
-  let label = ap ?? "running";
-  let tone = "border-[var(--color-info)]/40 text-[var(--color-info)] bg-[var(--color-info)]/10";
-  if (p.status === "done") {
-    Icon = CheckCircle2; iconClass = "text-[var(--color-success)]";
-    label = "done"; tone = "border-[var(--color-success)]/40 text-[var(--color-success)] bg-[var(--color-success)]/10";
-  } else if (p.status === "failed" || p.status === "cancelled") {
-    Icon = AlertCircle; iconClass = "text-[var(--color-danger)]";
-    label = p.status; tone = "border-[var(--color-danger)]/40 text-[var(--color-danger)] bg-[var(--color-danger)]/10";
-  }
-
-  // "+N" badge when there are MORE running builds than just the one
-  // we're following — so users who queued additional builds know they
-  // need to switch context to see them.
+  // Followed pipeline → the new v2 pill. "+N more" sibling appears only
+  // when there are MORE running builds than just the one we're following.
   const otherRunning = Math.max(0, runningCount - (p.status === "running" ? 1 : 0));
-
   return (
-    <Link
-      to="/new"
-      title={`Pipeline ${p.pipelineId} · ${p.url}${otherRunning > 0 ? ` (and ${otherRunning} more running)` : ""}`}
-      className={cn(
-        "flex items-center gap-2 px-2.5 h-7 rounded-md border text-xs transition-all",
-        tone,
-      )}
-    >
-      <Icon size={12} className={iconClass} />
-      <span className="font-medium">{label}</span>
-      <span className="opacity-60">· {done}/{total}</span>
+    <div className="flex items-center gap-1.5">
+      <PipelineStatusPill />
       {otherRunning > 0 && (
-        <span
-          className="ml-1 px-1.5 rounded bg-[var(--color-info)]/30 text-[var(--color-info)] text-[10px] font-mono"
-          title={`${otherRunning} additional build${otherRunning === 1 ? "" : "s"} running — switch context via Recent Builds`}
+        <Link
+          to="/pipelines"
+          className="px-1.5 h-5 inline-flex items-center rounded-full bg-[var(--color-info-bg)] text-[var(--color-info)] text-[10px] font-mono"
+          title={`${otherRunning} additional build${otherRunning === 1 ? "" : "s"} running — open Pipelines to switch context`}
         >
           +{otherRunning}
-        </span>
+        </Link>
       )}
-    </Link>
+    </div>
   );
 }
 
@@ -266,7 +243,7 @@ function TopBar({
       role="banner"
       className="sticky top-0 z-30 border-b border-[var(--color-border)] backdrop-blur bg-[var(--color-canvas)]/75"
     >
-      <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 h-14 flex items-center gap-4 lg:gap-6">
+      <div className="max-w-[1400px] mx-auto w-full px-4 sm:px-6 h-16 flex items-center gap-4 lg:gap-6">
         {/* Hamburger — only on mobile. Opens the slide-in drawer. */}
         <button
           type="button"
@@ -276,18 +253,29 @@ function TopBar({
         >
           <Menu size={18} aria-hidden="true" />
         </button>
-        {/* Brand — clickable to home. The logo glyph is decorative
-            because the text "Proj-Clarion" already conveys the brand;
-            screen readers don't need to announce it twice. */}
+        {/* Brand cluster — accent-tinted "brand tile" wraps the Logo
+            mark, wordmark sits beside it with a mono SE CONSOLE sub-
+            badge to distinguish this surface from any future Cloud-
+            facing Clarion product. The Logo's stroke is `currentColor`,
+            so the tile's color tracks the active theme accent. */}
         <Link
           to="/"
-          className="flex items-center gap-2.5 font-semibold tracking-tight rounded-md -mx-1 px-1 py-1 hover:bg-white/[0.03] transition-colors"
+          className="flex items-center gap-3 rounded-md -mx-1 px-1 py-1 hover:bg-white/[0.03] transition-colors"
           aria-label="Proj-Clarion home"
         >
-          <Logo size={22} />
-          <span className="text-[15px]">Proj-Clarion</span>
-          <span className="hidden sm:inline text-[var(--color-text-faint)] font-normal text-[11px] ml-1 px-1.5 py-0.5 rounded border border-[var(--color-border)]">
-            SE Console
+          <span
+            className="brand-tile inline-flex items-center justify-center w-9 h-9 rounded-[10px]"
+            aria-hidden="true"
+          >
+            <Logo size={22} />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span className="text-[16px] font-semibold tracking-tight text-[var(--color-text)]">
+              Proj-Clarion
+            </span>
+            <span className="brand-sub-badge hidden sm:inline-flex mt-0.5 w-fit">
+              SE Console
+            </span>
           </span>
         </Link>
         {/* Primary nav — hidden on mobile (replaced by overflow menu in
@@ -317,19 +305,38 @@ function TopBar({
           })}
         </nav>
         <div className="ml-auto flex items-center gap-2 sm:gap-3 text-xs text-[var(--color-text-muted)]">
-          <PipelineIndicator />
-          <span className="hidden lg:inline">
-            mode <span className={cn("font-mono", modeColor)}>{mode}</span>
+          <PipelineLiveCluster />
+          {/* Mode chip — inline label paired with a mono value, mirroring
+              how Grafana panels render unit/value pairs. The accent
+              token cascades through the value so an `alloy`-mode Clarion
+              reads as "primary" even at a glance. */}
+          <span
+            className="hidden lg:inline-flex items-center gap-1.5 h-7 px-2 rounded-md border border-[var(--color-border)] bg-[var(--color-canvas-elev1)]/60"
+            title={`Build mode: ${mode}`}
+          >
+            <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-faint)]">mode</span>
+            <span className={cn("font-mono text-[11px]", modeColor)}>{mode}</span>
           </span>
           <button
             onClick={onOpenPalette}
             aria-label="Open command palette"
             aria-keyshortcuts="Meta+K Control+K"
-            className="flex items-center gap-2 h-8 px-3 rounded-md border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] hover:bg-[var(--color-canvas-elev2)] hover:border-[var(--color-border-strong)] transition-all"
+            className={cn(
+              "flex items-center gap-2 h-8 pl-2.5 pr-1.5 rounded-md",
+              "border border-[var(--color-border)] bg-[var(--color-canvas-elev1)]/70",
+              "hover:bg-[var(--color-canvas-elev2)] hover:border-[var(--color-border-strong)]",
+              "focus-visible:border-[color:var(--color-accent-border)] transition-colors",
+            )}
           >
-            <Search size={12} aria-hidden="true" />
+            <Search size={12} aria-hidden="true" className="text-[var(--color-text-faint)]" />
             <span className="hidden sm:inline text-[var(--color-text-muted)]">Search…</span>
-            <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] font-mono text-[var(--color-text-faint)] ml-2">
+            <kbd
+              className={cn(
+                "hidden sm:inline-flex items-center gap-0.5 ml-2 px-1.5 py-0.5 rounded",
+                "text-[10px] font-mono text-[var(--color-text-faint)]",
+                "border border-[var(--color-border)] bg-[var(--color-canvas)]/60",
+              )}
+            >
               <span>⌘</span><span>K</span>
             </kbd>
           </button>

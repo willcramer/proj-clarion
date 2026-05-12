@@ -19,141 +19,127 @@
    for both regular text (4.5:1) and UI elements (3:1).
 */
 
+/* ── Token system — Proj-Clarion redesign v2 (Signal direction) ──
+   Source: claude_design_assets/clarion-redesign-v2/tokens.css.
+   Pasted under @theme so Tailwind v4 picks them up as utility classes;
+   light theme overrides happen below via [data-theme="light"]. */
 @theme {
-  /* ── Surfaces — Signal direction ──
-     Deep slate canvas; reads as instrument / telemetry / observability
-     without borrowing Grafana's orange. Three elevation steps for
-     card / popover / tooltip layering.
-     (Tokens from claude_design_assets/clarion-redesign.html: data-direction="signal".) */
+  /* Canvas surfaces — slate-navy, cooler than near-black */
   --color-canvas:        #0a0e14;
   --color-canvas-elev1:  #131820;
   --color-canvas-elev2:  #1c232d;
   --color-canvas-elev3:  #252e3a;
 
-  /* Borders — two strengths */
-  --color-border:        rgba(255, 255, 255, 0.07);
-  --color-border-strong: rgba(255, 255, 255, 0.16);
+  /* Borders */
+  --color-border:        rgba(180, 200, 230, 0.08);
+  --color-border-strong: rgba(180, 200, 230, 0.16);
 
-  /* Text — three contrast levels */
-  --color-text:          #eef3f8;
-  --color-text-muted:    #a3b3c4;
-  --color-text-faint:    #6e8093;
+  /* Text */
+  --color-text:          #eef1f6;
+  --color-text-muted:    #9aa3b2;
+  --color-text-faint:    #6b7385;
 
-  /* Brand accent — teal-400. Used for primary actions, focus rings,
-     "active phase" state. Replaces the prior violet. */
+  /* Accent (teal — Signal direction). Primary actions, focus rings,
+     active states, the brand mark. */
   --color-accent:        #2dd4bf;
-  --color-accent-hover:  #14b8a6;          /* teal-500 — pressed / hover state */
-  --color-accent-deep:   #14b8a6;          /* canonical alias for the deep tone */
-  --color-accent-bg:     rgba(45, 212, 191, 0.12);
-  --color-accent-border: rgba(45, 212, 191, 0.36);
-  --color-on-accent:     #042220;          /* dark on teal for contrast */
+  --color-accent-hover:  #5eead4;
+  --color-accent-deep:   #14b8a6;
+  --color-accent-bg:     rgba(45, 212, 191, 0.13);
+  --color-accent-border: rgba(45, 212, 191, 0.42);
+  --color-on-accent:     #04211e;
 
-  /* "Live" — telemetry-flowing state, distinct from success. A demo
-     session with the emitter pulsing uses --color-live (pale green);
-     a completed phase uses --color-success (saturated green). */
+  /* "Live" — telemetry-flowing state, distinct from success.
+     Demo emitter pulse / "events flowing" cue. */
   --color-live:          #6ee7b7;
   --color-live-bg:       rgba(110, 231, 183, 0.12);
 
-  /* Signal — sky-300 secondary tier. For accents that aren't the
-     primary action — secondary callouts, sparkline trails, etc. */
+  /* Signal — sky-300 secondary tier (sparkline trails, secondary callouts). */
   --color-signal:        #7dd3fc;
   --color-signal-bg:     rgba(125, 211, 252, 0.12);
 
-  /* Grafana hint — kept for backward compat; deprecated. Use --color-accent
-     for new code. Will be removed once existing references are migrated. */
+  /* Grafana brand. Reserved — only for "live in cloud" cues. Never on idle UI. */
   --color-grafana:       #FF8833;
   --color-grafana-bg:    rgba(255, 136, 51, 0.14);
   --color-grafana-border: rgba(255, 136, 51, 0.42);
 
-  /* Status colors */
+  /* Semantic */
   --color-success:       #34d399;
-  --color-success-bg:    rgba(52, 211, 153, 0.12);
+  --color-success-bg:    rgba(52, 211, 153, 0.13);
   --color-warning:       #fbbf24;
-  --color-warning-bg:    rgba(251, 191, 36, 0.12);
-  --color-danger:        #fb7185;          /* rose-400 — slightly less harsh than red-400 on dark */
-  --color-danger-bg:     rgba(251, 113, 133, 0.12);
-  --color-info:          #93c5fd;
-  --color-info-bg:       rgba(147, 197, 253, 0.12);
+  --color-warning-bg:    rgba(251, 191, 36, 0.13);
+  --color-danger:        #f87171;
+  --color-danger-bg:     rgba(248, 113, 113, 0.13);
+  --color-info:          #60a5fa;
+  --color-info-bg:       rgba(96, 165, 250, 0.13);
 
-  /* Layout primitives — radii + shadow envelopes */
-  --radius:              14px;
-  --radius-sm:           8px;
-  --radius-lg:           20px;
-  --shadow-sm:           0 1px 2px rgba(0,0,0,.06), 0 1px 1px rgba(0,0,0,.04);
-  --shadow-md:           0 4px 20px -4px rgba(0,0,0,.18), 0 2px 6px -2px rgba(0,0,0,.08);
-  --shadow-lg:           0 24px 60px -20px rgba(0,0,0,.45), 0 8px 24px -8px rgba(0,0,0,.20);
+  /* Layout primitives — tighter than v1 (10px → 14px → 6px not 14/20/8) */
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 16px;
+
+  /* Shadows — darker on dark theme so layered cards read clearly */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 6px 18px -6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 60px -20px rgba(0, 0, 0, 0.6);
+
+  /* Motion */
+  --motion-fast:   140ms;
+  --motion-normal: 240ms;
+  --motion-slow:   360ms;
+  --ease:          cubic-bezier(0.22, 1, 0.36, 1);
 
   /* Typography */
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Consolas, monospace;
-
-  /* Motion — keep it short. Long animations feel laggy in tooling UIs. */
-  --motion-fast:   120ms;
-  --motion-normal: 200ms;
-  --motion-slow:   320ms;
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 }
 
 /* ── Light theme overrides ──
-   Applied when `<html data-theme="light">`. The ThemeProvider sets
-   that attribute synchronously before React paints (see index.html's
-   inline boot script) so we never flash dark → light.
-
-   Tokens designed to:
-   - Keep the SAME accent (violet) so brand identity is unchanged
-   - Use slightly darker status colours (red-600, green-600 etc.) for
-     contrast on light surfaces
-   - Use soft off-whites for canvas, pure white for elevated cards —
-     gives card-on-canvas separation without heavy borders
-   - Keep border luminance ratios sensible — light borders that don't
-     scream "table cell" but still read as separation
-*/
+   Applied via `[data-theme="light"]` on <html>. ThemeProvider sets the
+   attribute synchronously before React paints (see index.html boot
+   script) so dark↔light never flashes. */
 [data-theme="light"] {
-  /* Signal direction — light theme. Off-white canvas with pure white
-     cards; teal-700 accent for contrast on white. Status colours bumped
-     one step darker so they all pass WCAG AA on the soft-white canvas. */
-  --color-canvas:        #f4f7fa;
+  --color-canvas:        #f7f8fa;
   --color-canvas-elev1:  #ffffff;
-  --color-canvas-elev2:  #ffffff;
-  --color-canvas-elev3:  #ffffff;
+  --color-canvas-elev2:  #f0f2f6;
+  --color-canvas-elev3:  #e6e9ef;
 
-  /* Borders — slate-based with low alpha so they read as separation
-     without screaming "table cell". */
-  --color-border:        rgba(10, 30, 50, 0.08);
-  --color-border-strong: rgba(10, 30, 50, 0.20);
+  --color-border:        rgba(20, 30, 50, 0.08);
+  --color-border-strong: rgba(20, 30, 50, 0.14);
 
-  /* Text — slate-900 / slate-600 / slate-500 */
-  --color-text:          #0a1a2a;
-  --color-text-muted:    #475467;
-  --color-text-faint:    #6b7a89;
+  --color-text:          #0f1623;
+  --color-text-muted:    #5a6478;
+  --color-text-faint:    #8a93a3;
 
-  /* Accent — teal-700 (darker than the dark-mode teal-400 so it stays
-     ≥4.5:1 against white). */
-  --color-accent:        #0f766e;
-  --color-accent-hover:  #115e59;
-  --color-accent-deep:   #115e59;
-  --color-accent-bg:     rgba(15, 118, 110, 0.10);
-  --color-accent-border: rgba(15, 118, 110, 0.32);
+  /* Deeper teal so accent stays AA on white surfaces. */
+  --color-accent:        #0d9488;
+  --color-accent-hover:  #14b8a6;
+  --color-accent-deep:   #0f766e;
+  --color-accent-bg:     rgba(13, 148, 136, 0.10);
+  --color-accent-border: rgba(13, 148, 136, 0.30);
   --color-on-accent:     #ffffff;
 
-  /* Live / Signal — darker variants for the light canvas */
+  /* Live / Signal — darker for AA on light canvas. */
   --color-live:          #047857;
   --color-live-bg:       rgba(4, 120, 87, 0.10);
   --color-signal:        #075985;
   --color-signal-bg:     rgba(7, 89, 133, 0.10);
 
-  --color-grafana:       #ea580c;
-  --color-grafana-bg:    rgba(234, 88, 12, 0.10);
-  --color-grafana-border: rgba(234, 88, 12, 0.34);
+  --color-grafana:       #cf6b1a;
+  --color-grafana-bg:    rgba(207, 107, 26, 0.10);
 
-  /* Status — one step darker for AA on light surfaces */
-  --color-success:       #059669;
-  --color-success-bg:    rgba(5, 150, 105, 0.10);
+  --color-success:       #047857;
+  --color-success-bg:    rgba(4, 120, 87, 0.10);
   --color-warning:       #b45309;
   --color-warning-bg:    rgba(180, 83, 9, 0.10);
   --color-danger:        #b91c1c;
-  --color-danger-bg:     rgba(185, 28, 28, 0.10);
+  --color-danger-bg:     rgba(185, 28, 28, 0.09);
   --color-info:          #1d4ed8;
-  --color-info-bg:       rgba(29, 78, 216, 0.10);
+  --color-info-bg:       rgba(29, 78, 216, 0.09);
+
+  /* Lighter shadows so cards lift cleanly on white. */
+  --shadow-sm: 0 1px 2px rgba(15, 22, 35, 0.06);
+  --shadow-md: 0 6px 18px -8px rgba(15, 22, 35, 0.18);
+  --shadow-lg: 0 24px 60px -24px rgba(15, 22, 35, 0.28);
 }
 
 :root {
@@ -289,6 +275,44 @@ pre code {
 ::selection {
   background: var(--color-accent-bg);
   color: var(--color-text);
+}
+
+/* UserMenu avatar — gradient surface. Defined here (not as a Tailwind
+   class on the component) so the brand gradient is centralised and any
+   future surface that wants the "identity" look can just opt in via
+   `.user-menu-avatar`. Falls back to the solid `--color-accent-bg`
+   Tailwind utility on the element if this rule is purged. */
+.user-menu-avatar {
+  background: linear-gradient(135deg, var(--color-accent), var(--color-info));
+}
+[data-theme="light"] .user-menu-avatar {
+  /* Slightly lighter mix on white canvas — the dark-theme accent
+     pair is too saturated on a near-white background. */
+  background: linear-gradient(135deg, var(--color-accent), var(--color-signal));
+  color: #ffffff;
+}
+
+/* Topbar brand mark — wraps the Logo in an accent-tinted tile so the
+   mark + wordmark read as one unit. Color cascades through Logo's
+   `currentColor` so the SVG glyph tracks the active theme accent. */
+.brand-tile {
+  color: var(--color-accent);
+  background: var(--color-accent-bg);
+  border: 1px solid var(--color-accent-border);
+}
+
+/* Topbar mono sub-badge — the small "SE CONSOLE" tag under the
+   wordmark. Faint border, mono caps, used as a typographic mark only. */
+.brand-sub-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  line-height: 1.2;
 }
 
 /* Utility for screen-reader-only content. Used by ARIA labels we want

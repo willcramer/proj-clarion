@@ -5,7 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#f4f7fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
     <meta name="color-scheme" content="dark light" />
     <meta name="description" content="Proj-Clarion — vertical-aware demo data generator. From prospect URL to live Grafana Cloud demo in minutes." />
     <meta property="og:title" content="Proj-Clarion · SE Console" />
@@ -45,20 +45,24 @@
     -->
     <style>
       html, body { margin: 0; }
-      html[data-theme="dark"],  html[data-theme="dark"]  body { background: #0a0e14; color: #eef3f8; }
-      html[data-theme="light"], html[data-theme="light"] body { background: #f4f7fa; color: #0a1a2a; }
+      /* Token-aligned FOUC paint — must match index.css's --color-canvas
+         and --color-text for dark + light. Updating both stays in sync. */
+      html[data-theme="dark"],  html[data-theme="dark"]  body { background: #0a0e14; color: #eef1f6; }
+      html[data-theme="light"], html[data-theme="light"] body { background: #f7f8fa; color: #0f1623; }
 
       /* Skip-to-content link visible only when keyboard-focused —
          essential for screen-reader / keyboard users to bypass the
          persistent TopBar. Inlined so it works before React mounts. */
       .skip-link {
         position: fixed; top: -40px; left: 8px;
-        background: #1c232d; color: #eef3f8;
+        background: #1c232d; color: #eef1f6;
         padding: 8px 12px; border-radius: 6px;
         text-decoration: none; font-size: 14px;
         z-index: 100; transition: top 0.15s;
       }
       .skip-link:focus { top: 8px; outline: 2px solid #2dd4bf; }
+      html[data-theme="light"] .skip-link { background: #ffffff; color: #0f1623; border: 1px solid rgba(20, 30, 50, 0.14); }
+      html[data-theme="light"] .skip-link:focus { outline: 2px solid #0d9488; }
     </style>
   </head>
   <body>
