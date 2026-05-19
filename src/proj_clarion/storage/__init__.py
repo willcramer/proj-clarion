@@ -14,21 +14,33 @@ Public surface:
 from proj_clarion.storage.db import build_dsn, connect, session_scope
 from proj_clarion.storage.migrator import apply_migrations, drop_all
 from proj_clarion.storage.repositories import (
+    AgentToolCallRepo,
     AuditRepo,
     DemoSessionRepo,
     KGRepo,
+    LlmCallRepo,
+    LlmEvalRepo,
     PipelineRepo,
     PlanRepo,
+    PolicyViolationRepo,
+    ProfileAuditRepo,
     ProfileRepo,
+    SystemHealthRepo,
 )
 
 __all__ = [
+    "AgentToolCallRepo",
     "AuditRepo",
     "DemoSessionRepo",
     "KGRepo",
+    "LlmCallRepo",
+    "LlmEvalRepo",
     "PipelineRepo",
     "PlanRepo",
+    "PolicyViolationRepo",
+    "ProfileAuditRepo",
     "ProfileRepo",
+    "SystemHealthRepo",
     "apply_migrations",
     "build_dsn",
     "connect",

@@ -387,12 +387,18 @@ class EntityEmitter:
         self._plan_id = str(plan.plan_id)
         self._kg = kg
         self._customer = customer or _slug_for_plan(plan)
-        # Default `asserts.env` to the customer slug so the Asserts
-        # entity-graph "env" filter naturally separates demos. Each
-        # customer's entities live in their own scope rather than every
-        # demo collapsing into env=prod together. CLI `--env <value>`
-        # overrides this for unusual cases (multi-environment demos).
-        self._env = env or self._customer
+        # Default `asserts.env` to the canonical Clarion env value
+        # (CLARION_ASSERTS_ENV, default `dev`) so every demo's KG
+        # entities collapse into the same Asserts env scope along with
+        # the spans + metrics. The pre-2026-05 behaviour defaulted this
+        # to the customer slug, which caused asserts_env to drift away
+        # from deployment.environment and the customer's KG entities
+        # to vanish from the canonical "dev" entity graph (seen on the
+        # Caterpillar run: asserts_env=caterpillar instead of dev).
+        # CLI `--env <value>` still overrides for unusual cases
+        # (multi-environment demos, customer-isolated tenants).
+        from proj_clarion.observability.otlp import clarion_env as _clarion_env
+        self._env = env or _clarion_env()
         self._site = site
         self._export_interval_ms = export_interval_seconds * 1000
         self._provider: MeterProvider | None = None

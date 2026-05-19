@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sparkles, Globe, ChevronRight, CheckCircle2, AlertCircle, Loader2,
   ExternalLink, Square, Rocket, Clock, Activity, Bug, RefreshCw, Info,
   History, MinusCircle, ArrowLeft, FileSearch,
+  ScrollText, ClipboardList, X,
 } from "lucide-react";
 
 import {
@@ -15,9 +16,13 @@ import { usePipeline, type PhaseState } from "@/lib/PipelineContext";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
+import { CrumbChip } from "@/components/CrumbChip";
 import { LogView } from "@/components/LogView";
 import { Pagination } from "@/components/Pagination";
-import { PipelineStepper } from "@/components/PipelineStepper";
+// PipelineStepper exists but the live view now uses the .journey-steps
+// inline buttons (below) for richer per-phase metadata. The stepper is
+// kept around for any future surface (history view, plan-detail mini
+// stepper) that wants the compact pill-style layout.
 import { useToasts } from "@/components/Toast";
 import { cn } from "@/lib/cn";
 import { computeMetrics, diagnose, formatDuration } from "@/lib/diagnose";
@@ -659,6 +664,8 @@ function RecentBuilds({ onReRun }: { onReRun: (s: PipelineSummary) => void }) {
 
 function RecentBuildRow({ s, onReRun }: { s: PipelineSummary; onReRun: () => void }) {
   const pipeline = usePipeline();
+  const qc = useQueryClient();
+  const [cancelling, setCancelling] = useState(false);
   const dur = useMemo(() => {
     if (!s.started_at) return null;
     const end = s.finished_at ? new Date(s.finished_at).getTime() : Date.now();
@@ -678,6 +685,26 @@ function RecentBuildRow({ s, onReRun }: { s: PipelineSummary; onReRun: () => voi
   let host = s.url;
   try { host = new URL(s.url).host.replace(/^www\./, ""); } catch { /* keep raw */ }
 
+  /** Cancel from the list, without navigating into the live view first.
+   *  Saves clicks during demos when an SE realises a wrong URL is queued
+   *  behind two other builds. The optimistic update is just "show
+   *  cancelling…" until the next 3s refetch resolves the row to
+   *  status=cancelled. */
+  async function cancel() {
+    if (!window.confirm(`Cancel build for ${host}? In-flight phases will stop.`)) return;
+    setCancelling(true);
+    try {
+      await cancelPipeline(s.pipeline_id);
+    } catch (e) {
+      window.alert(`Couldn't cancel: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      // Refresh the list so the row flips to cancelled without waiting
+      // for the next refetchInterval tick.
+      qc.invalidateQueries({ queryKey: ["pipelines"] });
+      setCancelling(false);
+    }
+  }
+
   // Click → snapshot-replay this pipeline into the live view. Avoids a
   // round-trip through /pipelines just to inspect a past build.
   return (
@@ -696,7 +723,26 @@ function RecentBuildRow({ s, onReRun }: { s: PipelineSummary; onReRun: () => voi
       <span className="text-xs text-[var(--color-text-faint)] tabular-nums shrink-0">
         {s.days}d · {formatDuration(dur)}
       </span>
-      {s.status !== "running" && (
+      {s.status === "running" ? (
+        // In-flight: surface a destructive × so the SE can stop the
+        // build without first opening the live view. Visible on the
+        // row (not gated by hover) because the running state is
+        // already attention-grabbing; the × must be reachable in one
+        // click during a live demo.
+        <button
+          onClick={cancel}
+          disabled={cancelling}
+          title="Cancel build"
+          aria-label={`Cancel build for ${host}`}
+          className={cn(
+            "p-1.5 rounded transition-colors",
+            "text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]",
+            "disabled:opacity-50 disabled:cursor-not-allowed",
+          )}
+        >
+          {cancelling ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
+        </button>
+      ) : (
         <button
           onClick={onReRun}
           title="Re-run with same URL/days"
@@ -880,6 +926,34 @@ function PipelineRunView({
               </span>
             )}
           </h1>
+          {/* Crumb chips: links to the source profile + landed plan when
+              available. Lets the SE jump out of the build view into
+              the upstream profile (to extend research) or the
+              downstream plan (to review what got generated). The chip
+              styling makes the buttons obvious; the underline-on-hover
+              version this replaced read as faint metadata. */}
+          {(p.profileId || p.planId) && (
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              {p.profileId && (
+                <CrumbChip
+                  to={`/profiles/${p.profileId}`}
+                  label="profile"
+                  value={p.profileId}
+                  icon={ScrollText}
+                  title="Open the company profile this build researched"
+                />
+              )}
+              {p.planId && (
+                <CrumbChip
+                  to={`/plans/${p.planId}`}
+                  label="plan"
+                  value={p.planId.slice(0, 8)}
+                  icon={ClipboardList}
+                  title="Open the demo plan this build produced"
+                />
+              )}
+            </div>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-2">
           {p.status === "running" && (
@@ -995,32 +1069,58 @@ function PipelineRunView({
               : state.status === "running" ? "streaming…"
               : state.status === "pending" ? "—"
               : "";
+            // Per-phase × is meaningful only while a phase is mid-run.
+            // The orchestrator runs phases sequentially, so cancelling
+            // the running phase ends the build. Same outcome as the
+            // build-level Stop button in the header — this is just a
+            // closer-to-eye affordance for when the SE is watching the
+            // journey panel itself.
+            const cancellable = state.status === "running";
             return (
-              <button
-                key={phase}
-                type="button"
-                onClick={() => setFocusPhase(focusPhase === phase ? null : phase)}
-                aria-pressed={isFocus}
-                className={cn("journey-step", stateClass, isFocus && "is-active")}
-              >
-                <div className="journey-step-head">
-                  <div className="journey-step-icon">
-                    <Icon
-                      size={14}
-                      className={state.status === "running" ? "animate-spin" : ""}
-                    />
+              <div key={phase} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setFocusPhase(focusPhase === phase ? null : phase)}
+                  aria-pressed={isFocus}
+                  className={cn("journey-step w-full", stateClass, isFocus && "is-active")}
+                >
+                  <div className="journey-step-head">
+                    <div className="journey-step-icon">
+                      <Icon
+                        size={14}
+                        className={state.status === "running" ? "animate-spin" : ""}
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="journey-step-no">{num}</div>
+                      <h3 className="journey-step-name truncate">{label}</h3>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <div className="journey-step-no">{num}</div>
-                    <h3 className="journey-step-name truncate">{label}</h3>
+                  <div className="journey-step-meta">
+                    <span>{durationLabel}</span>
+                    {linesLabel && <span>{linesLabel}</span>}
                   </div>
-                </div>
-                <div className="journey-step-meta">
-                  <span>{durationLabel}</span>
-                  {linesLabel && <span>{linesLabel}</span>}
-                </div>
-                <div className="journey-step-bar"><i /></div>
-              </button>
+                  <div className="journey-step-bar"><i /></div>
+                </button>
+                {cancellable && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onStop(); }}
+                    aria-label={`Cancel ${label} (stops the build)`}
+                    title="Cancel build"
+                    className={cn(
+                      "absolute top-2 right-2 w-6 h-6 rounded-full",
+                      "flex items-center justify-center",
+                      "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
+                      "border border-[color:var(--color-danger)]/40",
+                      "hover:bg-[var(--color-danger)] hover:text-white",
+                      "transition-colors shadow-sm z-10",
+                    )}
+                  >
+                    <X size={12} strokeWidth={2.5} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>

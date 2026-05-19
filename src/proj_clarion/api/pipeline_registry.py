@@ -359,7 +359,9 @@ async def _run_one(
     terminal_error: str | None = None
 
     try:
-        async for ev in run_demo_pipeline(url, company, days=days, **runner_kwargs):
+        async for ev in run_demo_pipeline(
+            url, company, days=days, pipeline_id=pipeline_id, **runner_kwargs,
+        ):
             pending.append(ev)
             if ev.get("event") == "pipeline":
                 if ev.get("status") == "done":

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Proj Clarion runtime architecture.
+  Mirrors the SVG diagram on the /about page in the UI, but uses
+  literal hex colors (not CSS tokens) so it renders correctly when
+  GitHub embeds it in README.md.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 460" width="100%" preserveAspectRatio="xMidYMid meet" aria-label="Proj Clarion architecture block diagram">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6B7385"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#22D3EE"/>
+    </marker>
+    <style>
+      .lbl { font: 500 12.5px Inter, system-ui, sans-serif; }
+      .sub { font: 10px ui-monospace, SFMono-Regular, monospace; fill: #9AA3B2; }
+      .section { font: 10px ui-monospace, SFMono-Regular, monospace; fill: #6B7385; letter-spacing: 0.08em; }
+    </style>
+  </defs>
+
+  <!-- canvas wash so the diagram looks the same on light + dark GitHub -->
+  <rect x="0" y="0" width="980" height="460" fill="#0B1220" rx="8"/>
+
+  <!-- ===== Row 1: Client tier ===== -->
+  <text x="20" y="20" class="section">CLIENT</text>
+
+  <!-- SE actor (accent / teal) -->
+  <rect x="20"  y="30"  width="120" height="56" rx="10" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.42)"/>
+  <text x="80"  y="52" text-anchor="middle" class="lbl" fill="#22D3EE">SE / Customer</text>
+  <text x="80"  y="70" text-anchor="middle" class="sub">browser</text>
+
+  <!-- UI tier (info / blue) -->
+  <rect x="180" y="30"  width="160" height="56" rx="10" fill="rgba(96,165,250,0.18)" stroke="#60A5FA"/>
+  <text x="260" y="52" text-anchor="middle" class="lbl" fill="#60A5FA">React 19 + Vite UI</text>
+  <text x="260" y="70" text-anchor="middle" class="sub">tokens · tabs · stepper</text>
+
+  <!-- API tier (info / blue) -->
+  <rect x="380" y="30"  width="180" height="56" rx="10" fill="rgba(96,165,250,0.18)" stroke="#60A5FA"/>
+  <text x="470" y="52" text-anchor="middle" class="lbl" fill="#60A5FA">FastAPI orchestrator</text>
+  <text x="470" y="70" text-anchor="middle" class="sub">/api/* · SSE · session_scope</text>
+
+  <!-- External agents (grafana orange + signal sky) -->
+  <rect x="620" y="20"  width="170" height="48" rx="10" fill="rgba(255,136,51,0.18)" stroke="rgba(255,136,51,0.42)"/>
+  <text x="705" y="40" text-anchor="middle" class="lbl" fill="#FF8833">Anthropic SDK</text>
+  <text x="705" y="58" text-anchor="middle" class="sub">opus + haiku · prompt caching</text>
+
+  <rect x="620" y="78"  width="170" height="48" rx="10" fill="rgba(125,211,252,0.16)" stroke="#7DD3FC"/>
+  <text x="705" y="98" text-anchor="middle" class="lbl" fill="#7DD3FC">External sources</text>
+  <text x="705" y="116" text-anchor="middle" class="sub">EDGAR · GH · Greenhouse · Wikidata</text>
+
+  <!-- ===== Row 2: Server + Storage tier ===== -->
+  <text x="380" y="130" class="section">SERVER + STORAGE</text>
+
+  <!-- Postgres (success / green) -->
+  <rect x="380" y="140" width="180" height="56" rx="10" fill="rgba(52,211,153,0.18)" stroke="#34D399"/>
+  <text x="470" y="162" text-anchor="middle" class="lbl" fill="#34D399">Postgres</text>
+  <text x="470" y="180" text-anchor="middle" class="sub">profiles · plans · pipelines · KG</text>
+
+  <!-- Entity emitter (live / green) -->
+  <rect x="620" y="140" width="170" height="56" rx="10" fill="rgba(110,231,183,0.16)" stroke="#6EE7B7"/>
+  <text x="705" y="162" text-anchor="middle" class="lbl" fill="#6EE7B7">Entity emitter</text>
+  <text x="705" y="180" text-anchor="middle" class="sub">OTel metrics · logs · traces</text>
+
+  <!-- ===== Row 3: Grafana Cloud row (grafana orange family) ===== -->
+  <text x="20" y="250" class="section">GRAFANA CLOUD</text>
+
+  <rect x="20"  y="260" width="150" height="56" rx="10" fill="rgba(255,136,51,0.18)" stroke="rgba(255,136,51,0.42)"/>
+  <text x="95"  y="282" text-anchor="middle" class="lbl" fill="#FF8833">Grafana Cloud</text>
+  <text x="95"  y="300" text-anchor="middle" class="sub">Mimir · Loki · Tempo</text>
+
+  <rect x="200" y="260" width="150" height="56" rx="10" fill="rgba(255,136,51,0.18)" stroke="rgba(255,136,51,0.42)"/>
+  <text x="275" y="282" text-anchor="middle" class="lbl" fill="#FF8833">Grafana Asserts</text>
+  <text x="275" y="300" text-anchor="middle" class="sub">Knowledge graph</text>
+
+  <rect x="380" y="260" width="150" height="56" rx="10" fill="rgba(255,136,51,0.18)" stroke="rgba(255,136,51,0.42)"/>
+  <text x="455" y="282" text-anchor="middle" class="lbl" fill="#FF8833">Grafana dashboards</text>
+  <text x="455" y="300" text-anchor="middle" class="sub">Provisioned per plan</text>
+
+  <rect x="560" y="260" width="150" height="56" rx="10" fill="rgba(255,136,51,0.18)" stroke="rgba(255,136,51,0.42)"/>
+  <text x="635" y="282" text-anchor="middle" class="lbl" fill="#FF8833">Grafana alerts</text>
+  <text x="635" y="300" text-anchor="middle" class="sub">Provisioned per plan</text>
+
+  <!-- AI Obs / Sigil (accent / teal — distinct from grafana orange) -->
+  <rect x="740" y="260" width="210" height="56" rx="10" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.42)"/>
+  <text x="845" y="282" text-anchor="middle" class="lbl" fill="#22D3EE">Grafana Cloud AI Obs</text>
+  <text x="845" y="300" text-anchor="middle" class="sub">Generations · trace tree · cost</text>
+
+  <!-- ===== Row 4: Output ===== -->
+  <text x="380" y="370" class="section">OUTPUT</text>
+
+  <rect x="380" y="380" width="400" height="56" rx="10" fill="rgba(110,231,183,0.16)" stroke="#6EE7B7"/>
+  <text x="580" y="402" text-anchor="middle" class="lbl" fill="#6EE7B7">Live demo session</text>
+  <text x="580" y="420" text-anchor="middle" class="sub">customer sees real telemetry flowing into Grafana Cloud</text>
+
+  <!-- ===== Arrows ===== -->
+  <!-- SE → UI → API -->
+  <line x1="140" y1="58" x2="180" y2="58" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <line x1="340" y1="58" x2="380" y2="58" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <!-- API → Anthropic / External sources -->
+  <line x1="560" y1="58" x2="620" y2="44"  stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <line x1="560" y1="58" x2="620" y2="102" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <!-- API → Postgres (accent) -->
+  <line x1="470" y1="86" x2="470" y2="140" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <!-- Postgres → Entity emitter -->
+  <line x1="560" y1="168" x2="620" y2="168" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <!-- Entity emitter → Mimir + Asserts (accent) -->
+  <line x1="705" y1="196" x2="95"  y2="260" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <line x1="705" y1="196" x2="275" y2="260" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <!-- API → Dashboards + Alerts -->
+  <line x1="470" y1="196" x2="455" y2="260" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <line x1="470" y1="196" x2="635" y2="260" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <!-- Anthropic → AI Obs (accent) -->
+  <line x1="705" y1="68"  x2="845" y2="260" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <!-- Cloud surfaces → Live demo (accent) -->
+  <line x1="95"  y1="316" x2="490" y2="380" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <line x1="635" y1="316" x2="580" y2="380" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+</svg>

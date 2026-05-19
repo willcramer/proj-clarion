@@ -704,23 +704,34 @@ def kg_publish(plan_id: str, push_rules: bool, emit: bool,
             current_plan_id_prefix=str(plan.plan_id)[:8],
         )
 
-        for fname, gcx_cmd in (
-            ("model-rules.yaml", ["gcx", "kg", "model-rules", "create", "-f"]),
-            ("prom-rules.yaml",  ["gcx", "kg", "rules",       "create", "-f"]),
+        from proj_clarion.observability.tools import track_tool_call
+        for fname, gcx_cmd, tool_name in (
+            ("model-rules.yaml", ["gcx", "kg", "model-rules", "create", "-f"], "kg_model_rules_push"),
+            ("prom-rules.yaml",  ["gcx", "kg", "rules",       "create", "-f"], "kg_prom_rules_push"),
         ):
             file_path = out_dir / fname
             console.print(f"[cyan]Pushing[/cyan] {fname} via gcx…")
-            result = subprocess.run(
-                [*gcx_cmd, str(file_path)],
-                capture_output=True, check=False,
-            )
-            if result.returncode != 0:
-                console.print(
-                    f"[red]Push failed[/red] for {fname}\n"
-                    f"  stdout: {result.stdout.decode(errors='replace')[:400]}\n"
-                    f"  stderr: {result.stderr.decode(errors='replace')[:400]}"
+            with track_tool_call(
+                agent_name="kg_publish_agent",
+                tool_name=tool_name,
+                provider_name="grafana_cloud",
+                target_system="gcx.kg",
+                action=" ".join(gcx_cmd[1:]),
+                input_summary=fname,
+            ) as _tool:
+                result = subprocess.run(
+                    [*gcx_cmd, str(file_path)],
+                    capture_output=True, check=False,
                 )
-                sys.exit(1)
+                if result.returncode != 0:
+                    _tool["output"] = f"failed exit={result.returncode}"
+                    console.print(
+                        f"[red]Push failed[/red] for {fname}\n"
+                        f"  stdout: {result.stdout.decode(errors='replace')[:400]}\n"
+                        f"  stderr: {result.stderr.decode(errors='replace')[:400]}"
+                    )
+                    sys.exit(1)
+                _tool["output"] = "ok"
             console.print(f"[green]Pushed[/green] {fname}")
 
     if not emit:
@@ -728,12 +739,16 @@ def kg_publish(plan_id: str, push_rules: bool, emit: bool,
         return
 
     # Pre-resolve effective env so the panel + emitter agree.
+    # Source-of-truth for the default is `clarion_env()` (reads
+    # CLARION_ASSERTS_ENV, default "dev"). Don't fall back to the
+    # customer slug — that's the regression we fixed in 2026-05.
+    from proj_clarion.observability.otlp import clarion_env
     effective_customer = (
         customer
         or (plan.source_profile_id or "").removeprefix("prof-").strip("-").lower()
         or "clarion"
     )
-    effective_env = env or effective_customer
+    effective_env = env or clarion_env()
     console.print(Panel.fit(
         f"[bold]Starting entity emitter[/bold]\n"
         f"entities: {len(expanded.nodes)}\n"
@@ -747,7 +762,17 @@ def kg_publish(plan_id: str, push_rules: bool, emit: bool,
         customer=customer, env=env, site=site,
         max_entities=max_entities,
     )
-    emitter.start()
+    from proj_clarion.observability.tools import track_tool_call
+    with track_tool_call(
+        agent_name="kg_publish_agent",
+        tool_name="kg_entity_emitter_start",
+        provider_name="grafana_cloud",
+        target_system="otlp.metrics",
+        action="start",
+        input_summary=f"entities={len(expanded.nodes)}",
+    ) as _tool:
+        emitter.start()
+        _tool["output"] = "started"
 
     # Schedule the post-start health check. 75s gives the periodic
     # MetricReader's first export (30s default) plus headroom for

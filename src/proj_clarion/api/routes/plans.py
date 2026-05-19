@@ -103,8 +103,15 @@ def global_audit(limit: int = 100, offset: int = 0) -> GlobalAuditResponse:
 
 
 @router.get("", response_model=list[PlanSummary])
-def list_plans(limit: int = 50, state: str | None = None) -> list[PlanSummary]:
-    """Newest plans first; optionally filter by review state.
+def list_plans(
+    limit: int = 50,
+    state: str | None = None,
+    source_profile_id: str | None = None,
+) -> list[PlanSummary]:
+    """Newest plans first; optionally filter by review state and/or
+    source profile. The Profile detail page passes `source_profile_id`
+    to enumerate plans built from one CompanyProfile so the SE can
+    jump from profile to any of its plans in one click.
 
     Also returns in-flight pipelines that have a profile but no plan yet
     as `pending=true` placeholder rows, so the page isn't blank during
@@ -114,10 +121,13 @@ def list_plans(limit: int = 50, state: str | None = None) -> list[PlanSummary]:
         # In-flight builds in the planning window — research done
         # (profile_id set), plan hasn't landed yet (plan_id null).
         # Skip when caller filtered by review_state since these don't
-        # have one.
+        # have one. Honor `source_profile_id` so the per-profile view
+        # only surfaces planning rows for THIS profile.
         if not state:
             for p in PipelineRepo().list(s, limit=20, status="running"):
                 if not p.get("profile_id") or p.get("plan_id"):
+                    continue
+                if source_profile_id and p.get("profile_id") != source_profile_id:
                     continue
                 out.append(PlanSummary(
                     plan_id=f"pending-{p['pipeline_id']}",
@@ -138,6 +148,8 @@ def list_plans(limit: int = 50, state: str | None = None) -> list[PlanSummary]:
         repo = PlanRepo()
         for pid, updated_at, source_pid, review_state in repo.list(s, limit=limit):
             if state and review_state != state:
+                continue
+            if source_profile_id and source_pid != source_profile_id:
                 continue
             plan = repo.get(s, pid)
             if plan is None:

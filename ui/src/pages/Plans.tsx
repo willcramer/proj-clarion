@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams, Link } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
 import { useMemo, useState } from "react";
 import {
   ArrowLeft, Check, AlertCircle, Play, Trash2, MessageCircle, Code2,
   Stethoscope, CheckCircle2, XCircle, AlertTriangle, MinusCircle, Loader2,
   Sparkles, Activity, ChevronDown, ChevronRight, FileDown,
+  ScrollText, Hammer,
 } from "lucide-react";
 
 import {
@@ -15,6 +16,7 @@ import {
 import { usePipeline } from "@/lib/PipelineContext";
 import { Card } from "@/components/Card";
 import { Badge, reviewStateTone } from "@/components/Badge";
+import { CrumbChip } from "@/components/CrumbChip";
 import { Button } from "@/components/Button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Tabs } from "@/components/Tabs";
@@ -26,7 +28,6 @@ import { DashboardsAlertsCard } from "@/components/plan/DashboardsAlertsCard";
 import { IncidentScriptTimeline } from "@/components/plan/IncidentScriptTimeline";
 import { PlanTabs, type PlanTabId } from "@/components/plan/PlanTabs";
 import { ProcessesTable } from "@/components/plan/ProcessesTable";
-import { ReadyToDemoCta } from "@/components/plan/ReadyToDemoCta";
 import { SampleDataSourcesCard } from "@/components/plan/SampleDataSourcesCard";
 import { TelemetryShapeCard } from "@/components/plan/TelemetryShapeCard";
 import {
@@ -39,11 +40,16 @@ import { cn } from "@/lib/cn";
 // ─── List ──────────────────────────────────────────────────────────
 
 export function PlansListPage() {
-  // Refetch every 5s so in-flight pipeline placeholders ("Planning...")
-  // stay alive and disappear when the planner agent lands a plan in DB.
+  // ?profile=prof-xxx narrows the list to plans from one CompanyProfile.
+  // The Profile detail page's "See all on Plans →" link sets this so
+  // an SE can keep their context when jumping from one surface to the
+  // other. Stripping the param via setSearchParams clears the filter.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const profileFilter = searchParams.get("profile") ?? undefined;
+
   const plans = useQuery({
-    queryKey: ["plans"],
-    queryFn: () => listPlans(),
+    queryKey: ["plans", profileFilter ?? "all"],
+    queryFn: () => listPlans({ source_profile_id: profileFilter }),
     refetchInterval: 5_000,
   });
   const navigate = useNavigate();
@@ -61,6 +67,26 @@ export function PlansListPage() {
           DemoPlans the planner produced. Click in to inspect, approve, refine, or
           start a live demo.
         </p>
+        {profileFilter && (
+          <div className="mt-3 inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[var(--color-accent-bg)] border border-[color:var(--color-accent-border)] text-xs">
+            <span className="text-[var(--color-text-muted)]">filter</span>
+            <span className="font-mono text-[var(--color-accent)]">
+              profile = {profileFilter}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("profile");
+                setSearchParams(next, { replace: true });
+              }}
+              aria-label="Clear profile filter"
+              className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
+            >
+              ×
+            </button>
+          </div>
+        )}
       </header>
       <Card>
         {plans.isLoading ? (
@@ -107,7 +133,14 @@ export function PlansListPage() {
                         p.plan_id_short
                       )}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs">{p.source_profile_id}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">
+                      {/* Plain text on purpose. Clicking a plan row should
+                          land on the plan, full stop; the profile crumb
+                          is reachable from the plan detail page when
+                          needed. Mixing two click targets in one row
+                          made the flow confusing. */}
+                      {p.source_profile_id}
+                    </td>
                     <td className="px-4 py-3">
                       <Badge tone={p.pending ? "info" : reviewStateTone(p.review_state)}>
                         {p.review_state}
@@ -221,25 +254,13 @@ function PlanDetailBody({
   const sampleSources = useMemo(() => deriveSampleSources(plan), [plan]);
   const [activeTab, setActiveTab] = useState<PlanTabId>("processes");
 
+  // `isApproved` gates the DemoSessionCard in the hero right column.
+  // Export + start-demo actions live in PlanHeader's top-right action
+  // bar, so the v1 helpers that wired the footer CTA were removed
+  // along with ReadyToDemoCta.
   const isApproved =
     plan.review_state === "approved_for_provision"
     || plan.review_state === "provisioned";
-
-  function exportPlanJson() {
-    const blob = new Blob([JSON.stringify(plan, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${plan.plan_id}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function jumpToDemoSession() {
-    document.getElementById("plan-demo-session")?.scrollIntoView({
-      behavior: "smooth", block: "start",
-    });
-  }
 
   return (
     <div className="space-y-6">
@@ -302,15 +323,16 @@ function PlanDetailBody({
         )}
       </div>
 
-      <ReadyToDemoCta
-        ready={isApproved}
-        onStartDemo={jumpToDemoSession}
-        onExportPlan={exportPlanJson}
-      />
-
-      {/* Editor row, behind a disclosure so power-user surfaces stay
-          reachable without padding the default scroll. Defaults to
-          closed; the chevron remembers state per page session. */}
+      {/* Power-user disclosure. Holds the surfaces that aren't
+          right-clicked daily but the SE needs: composition (raw plan
+          tree), state transitions (approve / tear-down), health
+          diagnostics, demo session history, and the refine column
+          (chat + JSON editor).
+          Audit history was removed from here — it duplicated the
+          Audit tab's AuditTrailCard. The footer ReadyToDemoCta was
+          removed too — Export plan / Start demo already live in the
+          header action bar, so a second copy at the bottom was
+          redundant once tabs collapsed the page to one screen. */}
       <details className="group">
         <summary
           className={cn(
@@ -334,7 +356,6 @@ function PlanDetailBody({
             <PlanActions planId={plan.plan_id} state={plan.review_state} />
             <HealthPanel planId={plan.plan_id} />
             <DemoHistorySection planId={plan.plan_id} />
-            <AuditPanel rows={audit} />
           </div>
           <RefineColumn planId={plan.plan_id} planJson={plan} />
         </div>
@@ -424,6 +445,33 @@ function planTitle(state: string): { lead: string; display: string } {
   }
 }
 
+/** Look up the most recent pipeline whose plan_id matches and link
+ *  to it. Lets the SE jump from plan-detail back to the build that
+ *  produced it without going through the global Builds list. Returns
+ *  null while loading or if no matching pipeline is in the DB.
+ *
+ *  Renders as a CrumbChip so the link reads as a real "click me"
+ *  button, not as faint metadata next to the source-profile crumb. */
+function BuiltByChip({ planId }: { planId: string }) {
+  const pipelines = useQuery({
+    queryKey: ["pipelines"],
+    queryFn: listPipelines,
+    // Pipelines list is cheap; we just need ONE match. Cached.
+  });
+  const matches = (pipelines.data ?? []).filter((p) => p.plan_id === planId);
+  if (matches.length === 0) return null;
+  const m = matches[0];
+  return (
+    <CrumbChip
+      to={`/pipelines/${m.pipeline_id}`}
+      label="built by"
+      value={m.pipeline_id.slice(0, 8)}
+      icon={Hammer}
+      title="Open the pipeline that produced this plan"
+    />
+  );
+}
+
 function PlanHeader({ plan }: { plan: PlanDoc }) {
   const t = planTitle(plan.review_state);
   const isApproved =
@@ -464,8 +512,15 @@ function PlanHeader({ plan }: { plan: PlanDoc }) {
         <p className="mt-3 text-[var(--color-text-muted)] text-[15px] leading-relaxed max-w-2xl">
           {plan.narrative}
         </p>
-        <div className="mt-3 text-[11px] font-mono text-[var(--color-text-faint)]">
-          source profile <span className="text-[var(--color-text-muted)]">{plan.source_profile_id}</span>
+        <div className="mt-4 flex items-center gap-2 flex-wrap">
+          <CrumbChip
+            to={`/profiles/${plan.source_profile_id}`}
+            label="source profile"
+            value={plan.source_profile_id}
+            icon={ScrollText}
+            title="Open the profile this plan was generated from"
+          />
+          <BuiltByChip planId={plan.plan_id} />
         </div>
       </div>
       <div className="flex items-center gap-2 flex-wrap">
@@ -1031,85 +1086,8 @@ function HealthPanel({ planId }: { planId: string }) {
   );
 }
 
-/** Inline-link any URLs found in audit note text so an SE can click
- *  through to the folder/dashboard/KG entity that was created. The
- *  pipeline phase audit entries embed Grafana Cloud URLs in their note
- *  bodies for exactly this purpose. */
-function LinkifiedNote({ text }: { text: string }) {
-  // Conservative URL detector, matches http(s) URLs ending at whitespace
-  // or sentence punctuation. Won't break on URLs with query strings.
-  const parts = text.split(/(\bhttps?:\/\/[^\s)]+)/g);
-  return (
-    <>
-      {parts.map((part, i) => {
-        if (/^https?:\/\//.test(part)) {
-          // Trim trailing punctuation that's almost certainly sentence-end,
-          // not URL-meaningful (e.g. "https://x.com/foo." → strip the dot).
-          const trimmed = part.replace(/[.,;:!?]+$/, "");
-          const trailing = part.slice(trimmed.length);
-          return (
-            <span key={i}>
-              <a
-                href={trimmed}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[var(--color-accent)] hover:underline break-all"
-              >
-                {trimmed}
-              </a>
-              {trailing}
-            </span>
-          );
-        }
-        return <span key={i}>{part}</span>;
-      })}
-    </>
-  );
-}
-
-function AuditPanel({ rows }: { rows: Array<{ timestamp: string; actor: string; action: string; from_state: string | null; to_state: string | null; note: string | null }> }) {
-  if (rows.length === 0) return null;
-  return (
-    <Card className="p-5">
-      <h3 className="text-sm font-medium text-[var(--color-text)] m-0 mb-3">
-        Audit history
-      </h3>
-      <div className="space-y-3">
-        {rows.map((r, i) => {
-          // Cloud-asset audit actions get a small accent dot so they're
-          // distinguishable from plan-state transitions at a glance.
-          const isCloudCreate = r.action.startsWith("cloud.");
-          return (
-            <div key={i} className="flex items-start gap-3 text-xs">
-              <div className="text-[var(--color-text-faint)] font-mono shrink-0 w-32">
-                {new Date(r.timestamp).toLocaleString()}
-              </div>
-              <div
-                className={cn(
-                  "shrink-0 w-1.5 h-1.5 rounded-full mt-1.5",
-                  isCloudCreate
-                    ? "bg-[var(--color-accent)]"
-                    : "bg-[var(--color-text-faint)]/40",
-                )}
-              />
-              <div className="flex-1 min-w-0">
-                <div>
-                  <span className="text-[var(--color-text-muted)]">{r.actor}</span>{" "}
-                  <span className={isCloudCreate ? "font-medium" : ""}>{r.action}</span>{" "}
-                  {r.from_state && r.to_state && (
-                    <span className="text-[var(--color-text-faint)] font-mono">{r.from_state} → {r.to_state}</span>
-                  )}
-                </div>
-                {r.note && (
-                  <div className="text-[var(--color-text-muted)] mt-1 leading-relaxed">
-                    <LinkifiedNote text={r.note} />
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
+// LinkifiedNote + AuditPanel (v1) were removed. AuditTrailCard in the
+// Audit tab is the canonical audit view now; it renders the same row
+// shape with better hierarchy. The v1 AuditPanel-only URL linkifier
+// went with it — if a future surface needs inline URL rendering, lift
+// it back into `lib/` as a shared helper.

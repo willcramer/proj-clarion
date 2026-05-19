@@ -46,6 +46,6 @@ def resolve_cloud_creds() -> dict[str, str] | None:
     return {
         "GRAFANA_CLOUD_OTLP_ENDPOINT": endpoint,
         "GRAFANA_CLOUD_OTLP_AUTH":     auth,
-        "CLARION_ASSERTS_ENV":         os.environ.get("CLARION_ASSERTS_ENV", "prod"),
+        "CLARION_ASSERTS_ENV":         os.environ.get("CLARION_ASSERTS_ENV", "dev"),
         "CLARION_ASSERTS_SITE":        os.environ.get("CLARION_ASSERTS_SITE", "demo"),
     }

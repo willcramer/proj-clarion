@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "@/components/Layout";
 import { SetupGate } from "@/components/SetupGate";
 import { ToastProvider } from "@/components/Toast";
+import { AboutPage } from "@/pages/About";
+import { DocsPage } from "@/pages/Docs";
 import { AuditPage } from "@/pages/Audit";
 import { DashboardPage } from "@/pages/Dashboard";
 import { ProfilesListPage, ProfileDetailPage } from "@/pages/Profiles";
@@ -59,6 +61,8 @@ export default function App() {
                         the canonical "watch a build" view. */}
                     <Route path="/pipelines/:pipelineId" element={<PipelineRedirect />} />
                     <Route path="/audit" element={<AuditPage />} />
+                    <Route path="/about" element={<AboutPage />} />
+                    <Route path="/docs/ai-obs" element={<DocsPage />} />
                     {/* Legacy alias, keep so bookmarks to /demos still work. */}
                     <Route path="/demos" element={<AuditPage />} />
                     {/* Reachable from UserMenu → Settings. Same Setup

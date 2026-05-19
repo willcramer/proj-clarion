@@ -393,6 +393,118 @@ class AuditRepo:
 # restart. Surface mirrors the other repos: narrow, explicit methods.
 # ============================================================
 
+
+# ============================================================
+# ProfileAuditRepo — extend-research history per CompanyProfile.
+# Mirrors AuditRepo but keyed on profile_id and records the SE prompt
+# + agent summary + per-field additions counts.
+# ============================================================
+
+class ProfileAuditRepo:
+    """One row per /api/profiles/{id}/extend call. Append-only.
+
+    `additions` is a JSONB blob of {field_name: count}; we keep counts
+    rather than the full added payload so the audit row stays compact
+    and the actual additions live on the profile JSON itself."""
+
+    def record(
+        self,
+        session: Session,
+        profile_id: str,
+        *,
+        prompt: str,
+        summary: str,
+        additions: dict[str, int],
+        applied: bool,
+        actor: str = "se",
+    ) -> None:
+        session.execute(
+            text("""
+                INSERT INTO profile_audit_log
+                  (profile_id, actor, prompt, summary, additions, applied)
+                VALUES
+                  (:pid, :actor, :prompt, :summary, CAST(:additions AS JSONB), :applied)
+            """),
+            {
+                "pid": profile_id,
+                "actor": actor,
+                "prompt": prompt,
+                "summary": summary,
+                "additions": json.dumps(additions),
+                "applied": applied,
+            },
+        )
+
+    def history(
+        self, session: Session, profile_id: str, *, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """All extends for one profile, newest first. Powers the Profile
+        detail page's history block + the chat-panel reload-on-mount."""
+        rows = session.execute(
+            text("""
+                SELECT audit_id, created_at, profile_id, actor,
+                       prompt, summary, additions, applied
+                FROM profile_audit_log
+                WHERE profile_id = :pid
+                ORDER BY created_at DESC
+                LIMIT :lim
+            """),
+            {"pid": profile_id, "lim": int(limit)},
+        ).fetchall()
+        return [_profile_audit_row(r) for r in rows]
+
+    def list_all(
+        self,
+        session: Session,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Audit log across every profile, newest first. Joined with
+        company_profiles for source_url + company name so each row
+        reads on its own on the global Audit page."""
+        rows = session.execute(
+            text("""
+                SELECT al.audit_id, al.created_at, al.profile_id, al.actor,
+                       al.prompt, al.summary, al.additions, al.applied,
+                       cp.source_url,
+                       cp.profile_json->'company'->>'name' AS company_name
+                FROM profile_audit_log al
+                LEFT JOIN company_profiles cp ON cp.profile_id = al.profile_id
+                ORDER BY al.created_at DESC
+                LIMIT :lim OFFSET :off
+            """),
+            {"lim": int(limit), "off": int(offset)},
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = _profile_audit_row(r)
+            d["url"] = r[8]
+            d["company"] = r[9]
+            out.append(d)
+        return out
+
+    def count_all(self, session: Session) -> int:
+        row = session.execute(text("SELECT COUNT(*) FROM profile_audit_log")).fetchone()
+        return int(row[0]) if row else 0
+
+
+def _profile_audit_row(r) -> dict[str, Any]:
+    """Shape one profile_audit_log row into the dict the API + UI
+    consume. Kept narrow on purpose — `additions` is already JSONB
+    so the SQLAlchemy driver hands it back as a dict."""
+    return {
+        "audit_id":    r[0],
+        "created_at":  r[1],
+        "profile_id":  r[2],
+        "actor":       r[3],
+        "prompt":      r[4],
+        "summary":     r[5],
+        "additions":   r[6] or {},
+        "applied":     bool(r[7]),
+    }
+
+
 class PipelineRepo:
     """One row per build, plus an append-only event log and a
     denormalised phase rollup. The event log is the SSE replay source
@@ -902,7 +1014,510 @@ def _row_to_dict(row) -> dict:
     }
 
 
+# ============================================================
+# LlmCallRepo — one row per Anthropic LLM call. Append-only.
+# ============================================================
+
+
+class LlmCallRepo:
+    """Per-call record of every Anthropic API hit. Rows are written
+    from the OTel wrapper in `observability/llm_client.py` after each
+    call completes, both for pipeline subprocess calls and SE-facing
+    extend/refine calls (those write with `pipeline_id`+`phase` NULL).
+
+    The table is the durable counterpart to the gen_ai.* spans in
+    Tempo — same numbers, but queryable with plain SQL when the SE
+    wants to see "what did this build cost" without leaving the UI."""
+
+    def record(
+        self,
+        session: Session,
+        *,
+        call_id: str,
+        model: str,
+        agent_name: str,
+        pipeline_id: str | None = None,
+        phase: str | None = None,
+        prompt_template: str | None = None,
+        prompt_version: str | None = None,
+        sigil_generation_id: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        stop_reason: str | None = None,
+        cost_usd: float = 0.0,
+        cache_savings_usd: float = 0.0,
+        ttft_ms: int | None = None,
+        attempt: int = 1,
+        error_type: str | None = None,
+        is_stream: bool = False,
+    ) -> None:
+        session.execute(
+            text("""
+                INSERT INTO llm_calls
+                  (call_id, pipeline_id, phase, prompt_template, prompt_version,
+                   model, agent_name, sigil_generation_id,
+                   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                   stop_reason, cost_usd, cache_savings_usd, ttft_ms,
+                   attempt, error_type, is_stream)
+                VALUES
+                  (:call_id, :pipeline_id, :phase, :prompt_template, :prompt_version,
+                   :model, :agent_name, :sigil_generation_id,
+                   :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens,
+                   :stop_reason, :cost_usd, :cache_savings_usd, :ttft_ms,
+                   :attempt, :error_type, :is_stream)
+                ON CONFLICT (call_id) DO NOTHING
+            """),
+            {
+                "call_id": call_id,
+                "pipeline_id": pipeline_id,
+                "phase": phase,
+                "prompt_template": prompt_template,
+                "prompt_version": prompt_version,
+                "model": model,
+                "agent_name": agent_name,
+                "sigil_generation_id": sigil_generation_id,
+                "input_tokens": int(input_tokens),
+                "output_tokens": int(output_tokens),
+                "cache_read_tokens": int(cache_read_tokens),
+                "cache_write_tokens": int(cache_write_tokens),
+                "stop_reason": stop_reason,
+                "cost_usd": float(cost_usd),
+                "cache_savings_usd": float(cache_savings_usd),
+                "ttft_ms": ttft_ms,
+                "attempt": int(attempt),
+                "error_type": error_type,
+                "is_stream": bool(is_stream),
+            },
+        )
+
+    def for_pipeline(
+        self, session: Session, pipeline_id: str, *, limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """All llm_calls for one pipeline, oldest first (so the result
+        reads in execution order). Limit defaults high — pipelines
+        rarely make more than ~10 calls but we don't want to silently
+        truncate when one does."""
+        rows = session.execute(
+            text("""
+                SELECT call_id, pipeline_id, phase, prompt_template, prompt_version,
+                       model, agent_name, sigil_generation_id,
+                       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                       stop_reason, cost_usd, cache_savings_usd, ttft_ms,
+                       attempt, error_type, created_at
+                FROM llm_calls
+                WHERE pipeline_id = :pid
+                ORDER BY created_at ASC
+                LIMIT :lim
+            """),
+            {"pid": pipeline_id, "lim": int(limit)},
+        ).fetchall()
+        return [_llm_call_row(r) for r in rows]
+
+    def aggregate_cost_by_phase(
+        self, session: Session, pipeline_id: str,
+    ) -> dict[str, float]:
+        """Sum of cost_usd grouped by phase for one pipeline. Used by
+        the pipeline summary to show 'research: $0.12, plan: $0.34'."""
+        rows = session.execute(
+            text("""
+                SELECT COALESCE(phase, 'unphased') AS phase, SUM(cost_usd)::float AS total
+                FROM llm_calls
+                WHERE pipeline_id = :pid
+                GROUP BY 1
+                ORDER BY 1
+            """),
+            {"pid": pipeline_id},
+        ).fetchall()
+        return {r[0]: float(r[1] or 0.0) for r in rows}
+
+
+def _llm_call_row(r) -> dict[str, Any]:
+    """Shape one llm_calls row into the dict the API returns. Costs
+    are NUMERIC in postgres → Decimal in Python; cast to float for
+    JSON-friendliness."""
+    return {
+        "call_id":              r[0],
+        "pipeline_id":          r[1],
+        "phase":                r[2],
+        "prompt_template":      r[3],
+        "prompt_version":       r[4],
+        "model":                r[5],
+        "agent_name":           r[6],
+        "sigil_generation_id":  r[7],
+        "input_tokens":         int(r[8] or 0),
+        "output_tokens":        int(r[9] or 0),
+        "cache_read_tokens":    int(r[10] or 0),
+        "cache_write_tokens":   int(r[11] or 0),
+        "stop_reason":          r[12],
+        "cost_usd":             float(r[13] or 0.0),
+        "cache_savings_usd":    float(r[14] or 0.0),
+        "ttft_ms":              r[15],
+        "attempt":              int(r[16] or 1),
+        "error_type":           r[17],
+        "created_at":           r[18],
+    }
+
+
+# ============================================================
+# LlmEvalRepo — one row per structural eval check. Append-only.
+# ============================================================
+
+
+class LlmEvalRepo:
+    """Per-eval record of structural / behavioural checks run after
+    a pipeline phase produces its artefact. Each row is a single
+    (phase, eval_name) → (passed, score) result. Append-only: re-runs
+    produce additional rows so we can graph drift over time."""
+
+    def record(
+        self,
+        session: Session,
+        *,
+        phase: str,
+        eval_name: str,
+        passed: bool,
+        pipeline_id: str | None = None,
+        score: float | None = None,
+        model: str | None = None,
+        prompt_version: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        session.execute(
+            text("""
+                INSERT INTO llm_evals
+                  (pipeline_id, phase, eval_name, score, passed,
+                   model, prompt_version, details)
+                VALUES
+                  (:pid, :phase, :name, :score, :passed,
+                   :model, :version, CAST(:details AS JSONB))
+            """),
+            {
+                "pid": pipeline_id,
+                "phase": phase,
+                "name": eval_name,
+                "score": score,
+                "passed": bool(passed),
+                "model": model,
+                "version": prompt_version,
+                "details": json.dumps(details or {}),
+            },
+        )
+
+    def for_pipeline(
+        self, session: Session, pipeline_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = session.execute(
+            text("""
+                SELECT eval_id, pipeline_id, phase, eval_name,
+                       score, passed, model, prompt_version, details, created_at
+                FROM llm_evals
+                WHERE pipeline_id = :pid
+                ORDER BY created_at ASC
+            """),
+            {"pid": pipeline_id},
+        ).fetchall()
+        return [_llm_eval_row(r) for r in rows]
+
+
+def _llm_eval_row(r) -> dict[str, Any]:
+    """Shape one llm_evals row into the dict the API returns."""
+    return {
+        "eval_id":         r[0],
+        "pipeline_id":     r[1],
+        "phase":           r[2],
+        "eval_name":       r[3],
+        "score":           float(r[4]) if r[4] is not None else None,
+        "passed":          bool(r[5]),
+        "model":           r[6],
+        "prompt_version":  r[7],
+        "details":         r[8] or {},
+        "created_at":      r[9],
+    }
+
+
+# ============================================================
+# AgentToolCallRepo — one row per agent tool invocation.
+# Append-only.
+# ============================================================
+
+
+class AgentToolCallRepo:
+    """Per-tool-call record. Each row is one external system reach
+    (web_search / db_read / db_write / kg_read / kg_write / api_call /
+    file_read / shell_exec) made by a Clarion agent.
+
+    Written from the `track_tool_call` context manager in
+    `observability/tools.py`. Read by Grafana Cloud dashboards via the
+    Postgres datasource for agent-tool heatmaps + latency trends.
+
+    Append-only: re-runs add more rows; nothing is updated in place."""
+
+    def record(
+        self,
+        session: Session,
+        *,
+        agent_name: str,
+        tool_name: str,
+        pipeline_id: str | None = None,
+        llm_call_id: str | None = None,
+        target_system: str | None = None,
+        action: str | None = None,
+        input_summary: str | None = None,
+        output_summary: str | None = None,
+        success: bool = True,
+        error_msg: str | None = None,
+        duration_ms: int | None = None,
+    ) -> str:
+        """Insert and return the call_id (UUID as string).
+
+        Truncates input/output/error fields defensively — the context
+        manager already trims them but a direct caller might forget."""
+        row = session.execute(
+            text("""
+                INSERT INTO agent_tool_calls
+                  (pipeline_id, llm_call_id, agent_name, tool_name,
+                   target_system, action, input_summary, output_summary,
+                   success, error_msg, duration_ms)
+                VALUES
+                  (:pid, :llm_call_id, :agent, :tool,
+                   :target, :action, :inp, :outp,
+                   :ok, :err, :dur)
+                RETURNING call_id
+            """),
+            {
+                "pid": pipeline_id,
+                "llm_call_id": llm_call_id,
+                "agent": agent_name,
+                "tool": tool_name,
+                "target": target_system,
+                "action": action,
+                "inp": (input_summary or None) and str(input_summary)[:500],
+                "outp": (output_summary or None) and str(output_summary)[:200],
+                "ok": bool(success),
+                "err": (error_msg or None) and str(error_msg)[:500],
+                "dur": duration_ms,
+            },
+        ).fetchone()
+        return str(row[0]) if row else ""
+
+    def list_for_pipeline(
+        self, session: Session, pipeline_id: str, *, limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Every tool call this pipeline made, oldest first (execution
+        order). Limit defaults high — pipelines rarely make more than a
+        few dozen tool calls but we don't want silent truncation."""
+        rows = session.execute(
+            text("""
+                SELECT call_id, pipeline_id, llm_call_id, agent_name, tool_name,
+                       target_system, action, input_summary, output_summary,
+                       success, error_msg, duration_ms, created_at
+                FROM agent_tool_calls
+                WHERE pipeline_id = :pid
+                ORDER BY created_at ASC
+                LIMIT :lim
+            """),
+            {"pid": pipeline_id, "lim": int(limit)},
+        ).fetchall()
+        return [_agent_tool_call_row(r) for r in rows]
+
+
+def _agent_tool_call_row(r) -> dict[str, Any]:
+    """Shape one agent_tool_calls row into the dict the API + Grafana
+    panels consume. Kept narrow on purpose."""
+    return {
+        "call_id":        str(r[0]),
+        "pipeline_id":    r[1],
+        "llm_call_id":    r[2],
+        "agent_name":     r[3],
+        "tool_name":      r[4],
+        "target_system":  r[5],
+        "action":         r[6],
+        "input_summary":  r[7],
+        "output_summary": r[8],
+        "success":        bool(r[9]),
+        "error_msg":      r[10],
+        "duration_ms":    r[11],
+        "created_at":     r[12],
+    }
+
+
+# ============================================================
+# PolicyViolationRepo — one row per guardrail trip. Append-only.
+# ============================================================
+
+
+class PolicyViolationRepo:
+    """Per-violation record. Written from `observability/policy.py`
+    when a detector trips (cost_spike, output_too_long, prompt_injection,
+    unexpected_tool, etc.).
+
+    The detector functions are no-throw on this insert — a missing
+    migration or DB hiccup logs at debug and continues. The OTel span
+    event still fires, so policy violations are never silently lost."""
+
+    def record(
+        self,
+        session: Session,
+        *,
+        agent_name: str,
+        violation_type: str,
+        severity: str,
+        pipeline_id: str | None = None,
+        llm_call_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> str:
+        """Insert and return violation_id (UUID as string)."""
+        row = session.execute(
+            text("""
+                INSERT INTO agent_policy_violations
+                  (pipeline_id, llm_call_id, agent_name, violation_type,
+                   severity, details)
+                VALUES
+                  (:pid, :llm_call_id, :agent, :vtype, :sev,
+                   CAST(:details AS JSONB))
+                RETURNING violation_id
+            """),
+            {
+                "pid": pipeline_id,
+                "llm_call_id": llm_call_id,
+                "agent": agent_name,
+                "vtype": violation_type,
+                "sev": severity,
+                "details": json.dumps(details or {}),
+            },
+        ).fetchone()
+        return str(row[0]) if row else ""
+
+    def list_unresolved(
+        self, session: Session, *,
+        severity: str | None = None, limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Open violations, newest first. Optional severity filter for
+        the critical-only Grafana alert panel."""
+        if severity:
+            rows = session.execute(
+                text("""
+                    SELECT violation_id, pipeline_id, llm_call_id, agent_name,
+                           violation_type, severity, details, resolved, created_at
+                    FROM agent_policy_violations
+                    WHERE resolved = FALSE AND severity = :sev
+                    ORDER BY created_at DESC
+                    LIMIT :lim
+                """),
+                {"sev": severity, "lim": int(limit)},
+            ).fetchall()
+        else:
+            rows = session.execute(
+                text("""
+                    SELECT violation_id, pipeline_id, llm_call_id, agent_name,
+                           violation_type, severity, details, resolved, created_at
+                    FROM agent_policy_violations
+                    WHERE resolved = FALSE
+                    ORDER BY created_at DESC
+                    LIMIT :lim
+                """),
+                {"lim": int(limit)},
+            ).fetchall()
+        return [_policy_violation_row(r) for r in rows]
+
+
+def _policy_violation_row(r) -> dict[str, Any]:
+    """Shape one agent_policy_violations row into the dict the API +
+    Grafana panels consume."""
+    return {
+        "violation_id":   str(r[0]),
+        "pipeline_id":    r[1],
+        "llm_call_id":    r[2],
+        "agent_name":     r[3],
+        "violation_type": r[4],
+        "severity":       r[5],
+        "details":        r[6] or {},
+        "resolved":       bool(r[7]),
+        "created_at":     r[8],
+    }
+
+
+# ============================================================
+# SystemHealthRepo — one row per heartbeat tick per service.
+# Append-only with a 7-day retention sweep on each tick.
+# ============================================================
+
+
+class SystemHealthRepo:
+    """Per-tick heartbeat of an external dependency (postgres,
+    anthropic, grafana_cloud, serper, ...). Written from the lifespan
+    heartbeat loop in `api/main.py`.
+
+    Read by Grafana panels for the uptime % and latency-trend tiles."""
+
+    def record(
+        self,
+        session: Session,
+        *,
+        service_name: str,
+        status: str,
+        latency_ms: int | None = None,
+        error_msg: str | None = None,
+    ) -> None:
+        session.execute(
+            text("""
+                INSERT INTO system_health
+                  (service_name, status, latency_ms, error_msg)
+                VALUES
+                  (:svc, :status, :lat, :err)
+            """),
+            {
+                "svc": service_name,
+                "status": status,
+                "lat": latency_ms,
+                "err": (error_msg or None) and str(error_msg)[:500],
+            },
+        )
+
+    def prune(self, session: Session, *, keep_days: int = 7) -> int:
+        """Delete rows older than `keep_days`. Returns rows removed.
+        Called once per heartbeat tick to keep the table bounded
+        without a separate scheduler/cron."""
+        result = session.execute(
+            text("""
+                DELETE FROM system_health
+                WHERE checked_at < NOW() - (:d || ' days')::interval
+            """),
+            {"d": str(int(keep_days))},
+        )
+        return result.rowcount or 0
+
+    def latest_per_service(
+        self, session: Session,
+    ) -> list[dict[str, Any]]:
+        """Single most-recent row per service. Used by the Grafana
+        uptime-stat panel and by `/api/health/services` if/when
+        we expose it for the UI."""
+        rows = session.execute(
+            text("""
+                SELECT DISTINCT ON (service_name)
+                       service_name, status, latency_ms, error_msg, checked_at
+                FROM system_health
+                ORDER BY service_name, checked_at DESC
+            """),
+        ).fetchall()
+        return [
+            {
+                "service_name": r[0],
+                "status":       r[1],
+                "latency_ms":   r[2],
+                "error_msg":    r[3],
+                "checked_at":   r[4],
+            }
+            for r in rows
+        ]
+
+
 __all__: Iterable[str] = [
-    "ProfileRepo", "PlanRepo", "KGRepo", "AuditRepo", "PipelineRepo",
-    "DemoSessionRepo",
+    "AgentToolCallRepo",
+    "AuditRepo", "DemoSessionRepo", "KGRepo", "LlmCallRepo", "LlmEvalRepo",
+    "PipelineRepo", "PlanRepo", "PolicyViolationRepo",
+    "ProfileAuditRepo", "ProfileRepo", "SystemHealthRepo",
 ]

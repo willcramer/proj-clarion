@@ -127,12 +127,16 @@ class LogEmitter:
             "OTEL_EXPORTER_OTLP_LOGS_TEMPORALITY_PREFERENCE", "cumulative"
         )
         # Pull non-service-overridable attrs from base — this carries the
-        # customer-scoped `asserts.env` (= customer slug) and `asserts.site`
-        # already set by EntityEmitter via clarion_resource(). DO NOT pull
-        # those values from env vars here: the base is the source of truth,
-        # and shadowing them with `clarion_env()` re-collapses every demo
-        # back into env=prod, which defeats the whole "filter by customer
-        # in the entity graph" goal.
+        # canonical `asserts.env` (CLARION_ASSERTS_ENV, default `dev`)
+        # and `asserts.site` already set by EntityEmitter via
+        # clarion_resource(). The base Resource is the source of truth;
+        # don't try to recompute env here.
+        #
+        # (Pre-2026-05 the default was per-customer to keep entity graphs
+        # separated; the 2026-05 refactor collapses everything into
+        # env=dev so KG entities, traces, and metrics roll up under one
+        # env and the AI-obs demo trace tree stays coherent. The fix
+        # lives in EntityEmitter.__init__.)
         base_attrs = dict(base_resource.attributes)
         for st in self._svc_state:
             attrs = {

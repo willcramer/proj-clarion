@@ -10,12 +10,16 @@
  *   OrphanCleanup, auto-hidden when nothing's orphaned
  *   4 KpiCards, Plans · Profiles · Events · KG nodes
  *   DrilldownPanel, Plans-by-state or KG breakdown
- *   Recent builds, paginated table from listPipelines()
+ *   Demo library, card grid of researched companies (drill into a plan)
  *
- * Active pipeline state lives in the topbar (PipelineStatusPill, PR 1),
- * not as a separate strip on this page. Demo-session state lives in the
+ * Active pipeline state lives in the topbar (PipelineStatusPill), not
+ * as a separate strip on this page. Demo-session state lives in the
  * LiveDemoCard (right column of the hero grid). They surface different
  * things: builds (research → publish) vs emitters (data-flowing-to-Cloud).
+ *
+ * The v2 "Recent builds table + Pagination" variant of this page was
+ * tried and reverted — the Demo library is a much more useful landing
+ * surface for an SE coming back between calls.
  */
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -207,7 +211,6 @@ export function DashboardPage() {
 
 // ──────────────────────────────────────────────────────────────────
 // DemoLibrary, the homepage's "what's available to demo" surface.
-// Replaces the old build-history table (now lives at /new).
 //
 // Each card represents a CompanyProfile the SE has researched. Status
 // is derived from the profile's plans, "Ready to demo" if any plan
@@ -429,11 +432,8 @@ function deriveDemoStatus(
   return { tone: "draft", label: "Just researched" };
 }
 
-// Host-of helper used by DemoCard. The build-list helpers (statusToTone,
-// statusToFlag, formatDuration) lived here for the old Recent-builds
-// table, moved to /new along with the table.
 function hostOf(url: string | null): string {
-  if (!url) return ", ";
+  if (!url) return "—";
   try { return new URL(url).host.replace(/^www\./, ""); }
   catch { return url; }
 }
@@ -488,7 +488,7 @@ function OrphanCleanup() {
           <h2 className="text-sm font-medium">Orphan Grafana folders ({items.length})</h2>
           <p className="text-xs text-[var(--color-text-muted)] mt-1 max-w-2xl">
             These <code className="font-mono">clarion-*</code> folders exist in your stack
-            but their plan is no longer in the DB. Most likely from a delete that didn't
+            but their plan is no longer in the DB. Most likely from a delete that didn&rsquo;t
             include the Cloud-cleanup checkbox. Deleting cascades the folder + its
             dashboards + its alert rules.
           </p>
@@ -526,9 +526,9 @@ function OrphanRow({
         <div className="text-xs text-[var(--color-text-faint)] flex items-center gap-2 mt-0.5">
           <span className="font-mono truncate">{orphan.uid}</span>
           {orphan.plan_id && (
-            <span className="text-[var(--color-text-muted)]">· plan {orphan.plan_id.slice(0, 8)}</span>
+            <span className="text-[var(--color-text-muted)]">&middot; plan {orphan.plan_id.slice(0, 8)}</span>
           )}
-          <span className="text-[var(--color-warning)]">· {orphan.reason}</span>
+          <span className="text-[var(--color-warning)]">&middot; {orphan.reason}</span>
         </div>
       </div>
       {stackUrl && (

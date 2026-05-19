@@ -29,16 +29,55 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 class _FakeMessage:
     def __init__(self, text: str) -> None:
         self.content = [SimpleNamespace(type="text", text=text)]
+        # Streaming path in llm_client.call_anthropic calls .get_final_message()
+        # and then _extract_usage(final). _extract_usage reads .usage.* and
+        # .stop_reason; defaults are fine for the planner tests which don't
+        # care about cost/tokens.
+        self.usage = SimpleNamespace(
+            input_tokens=0, output_tokens=0,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        )
+        self.stop_reason = "end_turn"
+
+
+class _FakeStream:
+    """Mimics anthropic_client.messages.stream(...) context manager.
+
+    The new llm_client.call_anthropic drives `for chunk in stream.text_stream`
+    then calls `stream.get_final_message()`. We chunk the canned text into
+    a single yield (TTFT timestamp is still captured by the wrapper) and
+    return the same _FakeMessage from get_final_message()."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.text_stream = iter([text])
+
+    def __enter__(self) -> "_FakeStream":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def get_final_message(self) -> _FakeMessage:
+        return _FakeMessage(self._text)
 
 
 class _FakeMessages:
     def __init__(self, queue: list[str]) -> None:
         self._queue = queue
 
-    def create(self, **kwargs: object) -> _FakeMessage:
+    def _pop(self, where: str) -> str:
         if not self._queue:
-            raise AssertionError("Fake client exhausted; planner asked for an extra LLM call.")
-        return _FakeMessage(self._queue.pop(0))
+            raise AssertionError(
+                f"Fake client exhausted via {where}; planner asked for an extra LLM call."
+            )
+        return self._queue.pop(0)
+
+    def create(self, **kwargs: object) -> _FakeMessage:
+        return _FakeMessage(self._pop("create"))
+
+    def stream(self, **kwargs: object) -> _FakeStream:
+        return _FakeStream(self._pop("stream"))
 
 
 class _FakeClient:

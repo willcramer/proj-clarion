@@ -13,11 +13,14 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMemo, useState } from "react";
 import {
   Activity, CheckCircle2, AlertCircle, Loader2, Clock, Bug,
-  Rewind, ChevronRight, FileSearch, RefreshCw,
+  Rewind, ChevronRight, FileSearch, RefreshCw, X,
+  ScrollText, ClipboardList,
 } from "lucide-react";
 
+import { CrumbChip } from "@/components/CrumbChip";
 import {
-  listPipelines, cancelPipeline, type PipelineSummary,
+  listPipelines, listPlans, listProfiles, cancelPipeline,
+  type PipelineSummary, type PlanSummary, type ProfileSummary,
   type PipelinePhase, PIPELINE_PHASES,
 } from "@/lib/api";
 import { Card } from "@/components/Card";
@@ -154,6 +157,23 @@ function PipelinesList({
   selected: string | null;
   onSelect: (id: string | null) => void;
 }) {
+  const qc = useQueryClient();
+  /** Inline cancel from the list row — saves the click into the detail
+   *  pane just to find the Cancel button. The detail pane still has
+   *  the canonical Cancel button for users that landed there directly.
+   *  Confirm prompt because this is destructive + visible-on-list. */
+  async function cancelRow(pipeline_id: string, host: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!window.confirm(`Cancel build for ${host}? In-flight phases will stop.`)) return;
+    try {
+      await cancelPipeline(pipeline_id);
+    } catch (err) {
+      window.alert(`Couldn't cancel: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      qc.invalidateQueries({ queryKey: ["pipelines"] });
+    }
+  }
+
   return (
     <Card className="overflow-hidden">
       {loading ? (
@@ -164,33 +184,52 @@ function PipelinesList({
         </div>
       ) : (
         <ul className="divide-y divide-[var(--color-border)]">
-          {pipelines.map((p) => (
-            <li
-              key={p.pipeline_id}
-              onClick={() => onSelect(p.pipeline_id)}
-              className={cn(
-                "px-4 py-3 cursor-pointer transition-colors",
-                selected === p.pipeline_id ? "bg-white/[0.05]" : "hover:bg-white/[0.02]",
-              )}
-            >
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-mono text-xs">{p.pipeline_id.slice(0, 8)}</span>
-                <PipelineStatusBadge status={p.status} />
-              </div>
-              <div className="text-sm truncate">{p.url}</div>
-              <div className="text-xs text-[var(--color-text-faint)] mt-0.5 flex items-center gap-3">
-                <span className="inline-flex items-center gap-1">
-                  <Clock size={10} />
-                  {formatDuration(durationMs(p))}
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <Activity size={10} />
-                  {p.event_count}
-                </span>
-                <span>{new Date(p.started_at).toLocaleTimeString()}</span>
-              </div>
-            </li>
-          ))}
+          {pipelines.map((p) => {
+            let host = p.url;
+            try { host = new URL(p.url).host.replace(/^www\./, ""); } catch { /* keep raw */ }
+            return (
+              <li
+                key={p.pipeline_id}
+                onClick={() => onSelect(p.pipeline_id)}
+                className={cn(
+                  "px-4 py-3 cursor-pointer transition-colors",
+                  selected === p.pipeline_id ? "bg-white/[0.05]" : "hover:bg-white/[0.02]",
+                )}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="font-mono text-xs">{p.pipeline_id.slice(0, 8)}</span>
+                  <div className="flex items-center gap-1.5">
+                    <PipelineStatusBadge status={p.status} />
+                    {p.status === "running" && (
+                      <button
+                        onClick={(e) => cancelRow(p.pipeline_id, host, e)}
+                        title="Cancel build"
+                        aria-label={`Cancel build ${p.pipeline_id.slice(0, 8)}`}
+                        className={cn(
+                          "p-1 rounded transition-colors",
+                          "text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]",
+                        )}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="text-sm truncate">{p.url}</div>
+                <div className="text-xs text-[var(--color-text-faint)] mt-0.5 flex items-center gap-3">
+                  <span className="inline-flex items-center gap-1">
+                    <Clock size={10} />
+                    {formatDuration(durationMs(p))}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Activity size={10} />
+                    {p.event_count}
+                  </span>
+                  <span>{new Date(p.started_at).toLocaleTimeString()}</span>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>
@@ -336,6 +375,15 @@ function PipelineEventsPanel({ pipelineId }: { pipelineId: string }) {
               </>
             )}
           </div>
+          {/* Linked-resources strip. Surfaces this build's profile + plan
+              when present; falls back to the most-recent profile + plan
+              for the same URL host when this build itself didn't produce
+              them (e.g. it failed before research finished, or was
+              cancelled). The fallback is the answer to the recurring
+              "a lot of builds have no profile or plan attached"
+              complaint — even early-failed builds now point at SOMETHING
+              the SE can drill into for the same prospect. */}
+          {s && <LinkedResources summary={s} />}
         </div>
         <div className="flex items-center gap-2">
           {s?.status === "running" && (
@@ -450,5 +498,96 @@ function OpenInBuildButton({ pipelineId }: { pipelineId: string }) {
     >
       <RefreshCw size={12} /> Open in Build
     </Button>
+  );
+}
+
+
+/** Render a Profile + Plan crumb chip row for a pipeline.
+ *
+ *  Three resolution modes per slot:
+ *    1. Pipeline has its own profile_id / plan_id → render directly.
+ *    2. Pipeline's own is null but a profile (or plan) exists for the
+ *       same URL host → render the latest, plus a small "from latest run
+ *       for {host}" note so the SE knows this is a fallback link.
+ *    3. Nothing matches → render a faint "no profile yet for {host}" hint.
+ *
+ *  The fallback path is what fixes the recurring "build detail has no
+ *  profile / plan" complaint: builds that failed mid-research, or were
+ *  cancelled, never produced their own profile_id, but for prospects we've
+ *  researched before there's still a profile to point at. */
+function LinkedResources({ summary }: { summary: PipelineSummary }) {
+  const host = useMemo(() => {
+    try { return new URL(summary.url).hostname.replace(/^www\./, "").toLowerCase(); }
+    catch { return ""; }
+  }, [summary.url]);
+
+  // Fetch only when we need a fallback — i.e. when the pipeline's own
+  // profile_id or plan_id is missing. React Query handles caching across
+  // selections so the SE flipping between rows doesn't re-fetch each time.
+  const needsFallback = !summary.profile_id || !summary.plan_id;
+  const profiles = useQuery({
+    queryKey: ["profiles"],
+    queryFn: listProfiles,
+    enabled: needsFallback,
+  });
+  const profilesForHost = useMemo(() => {
+    if (!host || !profiles.data) return [] as ProfileSummary[];
+    return profiles.data.filter((p) => {
+      try { return new URL(p.primary_url).hostname.replace(/^www\./, "").toLowerCase() === host; }
+      catch { return false; }
+    });
+  }, [host, profiles.data]);
+
+  // Latest profile for the URL host (already newest-first from the API).
+  const latestProfileId = profilesForHost[0]?.profile_id ?? null;
+  const displayedProfileId = summary.profile_id ?? latestProfileId;
+  const profileIsFallback = !summary.profile_id && !!latestProfileId;
+
+  const plans = useQuery({
+    queryKey: ["plans-by-profile", displayedProfileId],
+    queryFn: () => listPlans({ source_profile_id: displayedProfileId ?? "" }),
+    enabled: needsFallback && !!displayedProfileId,
+  });
+  const latestPlanId = (plans.data ?? []).filter((p) => !p.pending)[0]?.plan_id ?? null;
+  const displayedPlanId = summary.plan_id ?? latestPlanId;
+  const planIsFallback = !summary.plan_id && !!latestPlanId;
+
+  return (
+    <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+      {displayedProfileId ? (
+        <CrumbChip
+          to={`/profiles/${displayedProfileId}`}
+          label={profileIsFallback ? "latest profile" : "profile"}
+          value={displayedProfileId}
+          icon={ScrollText}
+          title={
+            profileIsFallback
+              ? `This build didn't produce its own profile — showing the most recent profile for ${host}.`
+              : "Open the profile this build researched"
+          }
+        />
+      ) : host && profiles.isFetched ? (
+        <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md font-mono text-[10px] uppercase tracking-[0.06em] bg-[var(--color-canvas-elev1)] border border-dashed border-[var(--color-border)] text-[var(--color-text-faint)]">
+          no profile yet for {host}
+        </span>
+      ) : null}
+      {displayedPlanId ? (
+        <CrumbChip
+          to={`/plans/${displayedPlanId}`}
+          label={planIsFallback ? "latest plan" : "plan"}
+          value={displayedPlanId.slice(0, 8)}
+          icon={ClipboardList}
+          title={
+            planIsFallback
+              ? `This build didn't produce its own plan — showing the most recent plan for ${host}.`
+              : "Open the demo plan this build produced"
+          }
+        />
+      ) : displayedProfileId && plans.isFetched ? (
+        <span className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md font-mono text-[10px] uppercase tracking-[0.06em] bg-[var(--color-canvas-elev1)] border border-dashed border-[var(--color-border)] text-[var(--color-text-faint)]">
+          no plan yet for this profile
+        </span>
+      ) : null}
+    </div>
   );
 }

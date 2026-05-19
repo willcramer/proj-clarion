@@ -22,6 +22,35 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "proj-clarion-api"}
 
 
+@router.get("/health/services")
+def services_health() -> dict[str, object]:
+    """Latest heartbeat reading per external dependency.
+
+    Reads `system_health` (written by the lifespan heartbeat every
+    60s). Used by Grafana panels via the Postgres datasource for the
+    "Service uptime %" tiles, and by the UI for a sidebar dependency
+    chip row if/when we surface one."""
+    try:
+        from proj_clarion.storage import SystemHealthRepo, session_scope
+        with session_scope() as s:
+            latest = SystemHealthRepo().latest_per_service(s)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)[:200], "services": []}
+    return {
+        "ok": all(r["status"] == "healthy" for r in latest),
+        "services": [
+            {
+                "name":       r["service_name"],
+                "status":     r["status"],
+                "latency_ms": r["latency_ms"],
+                "error_msg":  r["error_msg"],
+                "checked_at": r["checked_at"].isoformat() if r["checked_at"] else None,
+            }
+            for r in latest
+        ],
+    }
+
+
 @router.get("/env")
 def env_status() -> dict[str, object]:
     """Mirror what `proj-clarion check env` reports, in JSON for the UI banner.

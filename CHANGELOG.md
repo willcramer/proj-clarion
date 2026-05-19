@@ -1,5 +1,248 @@
 # Changelog
 
+## [0.8.0] — AI obs: streaming, caching, tool calls, guardrails, heartbeat (2026-05-18)
+
+Six P0/P1/P2 changes landing together so the AI-observability story extends
+from "we instrument LLM calls" to "we observe agents, their tools, their
+guardrail trips, and the systems they depend on" — the regulated-buyer-grade
+audit story enterprise governance teams ask for.
+
+### Added
+
+- **Streaming on every Anthropic call (P0).** `llm_client.call_anthropic`
+  now uses `messages.stream()` internally and reassembles a non-stream
+  response shape. Call sites are unchanged. Every `llm_calls` row now
+  carries `ttft_ms` (time-to-first-token) and `is_stream = TRUE`.
+- **Migration `0007_llm_calls_is_stream.sql`** — `ALTER TABLE llm_calls
+  ADD COLUMN is_stream BOOLEAN NOT NULL DEFAULT FALSE`. Old rows stay
+  correct; new rows write `TRUE` from the wrapper.
+- **Migration `0008_agent_tool_calls.sql`** + **`AgentToolCallRepo`** —
+  per-tool-call audit table. `call_id UUID PK`, `pipeline_id` +
+  `llm_call_id` `ON DELETE SET NULL` so audit rows outlive the
+  pipelines/llm_calls they reference. 4 indexes (pipeline / agent×time /
+  system×time / time-DESC). Tool vocab open (no CHECK) so new types ship
+  without a migration.
+- **Migration `0009_agent_policy_violations.sql`** + **`PolicyViolationRepo`**
+  — guardrail-trip audit table. Same FK posture; partial index
+  `WHERE resolved = FALSE` on (severity, time) so the critical-alert
+  panel queries stay fast as the table grows. `resolved` flag for the
+  "I reviewed this" workflow.
+- **Migration `0010_system_health.sql`** + **`SystemHealthRepo`** —
+  heartbeat table. One row per probe per tick per service. Includes
+  `prune(keep_days=7)` so retention happens inline with each tick — no
+  separate cron job.
+- **`observability/policy.py`** — three detectors:
+  - `check_llm_call_anomalies()` — cost_spike (>$0.50/call),
+    output_too_long (>8K tokens), high_attempt_count (>3 retries).
+    Called from `llm_client._persist_call` after the row commits.
+  - `check_prompt_injection()` — substring scan over the conservative
+    pattern list ("ignore previous instructions", "DAN", etc.). Records
+    `critical` severity + a 300-char excerpt.
+  - `check_tool_scope()` — non-blocking allow-list enforcement
+    (`AGENT_TOOL_ALLOWLIST`). Records `high` severity when an agent
+    invokes a tool outside its declared set.
+  - Every detector writes a postgres row, emits an OTel span event,
+    and logs at `warning` — so a violation is visible on at least one
+    surface even if the other two are degraded.
+- **`observability/tools.py`** — `track_tool_call` context manager.
+  Wrap any external-system call (HTTP API, Postgres, KG read/write,
+  filesystem). Emits a `tool.<name>` span, writes to
+  `agent_tool_calls`, runs the tool-scope detector. Auto-pulls
+  `pipeline_id` from `llm_client` ContextVars so callers inside a
+  phase don't have to thread it.
+- **`observability/health.py`** — `heartbeat_loop` + `check_once`.
+  Probes Postgres, Anthropic, Grafana Cloud, Serper (when configured)
+  every 60s (overridable via `CLARION_HEARTBEAT_INTERVAL_S`). Latency
+  > 5000ms flips status to `degraded`; exceptions flip to `down`.
+  Pruning happens inline (`HEALTH_RETENTION_DAYS=7`).
+- **`api/main.py` lifespan** — spawns `heartbeat_loop` as an asyncio
+  task alongside the existing demo-session sweeper. Cancellation
+  propagates on shutdown.
+- **`/api/health/services`** — surfaces the latest heartbeat per
+  service in JSON. UI / Grafana panels read it without raw SQL.
+
+### Changed
+
+- **Cache_control on every long-system-prompt call site (P0).** The
+  big system prompts in `agents/planner.py::_llm_json`,
+  `agents/external_sources/extractor.py`, and
+  `api/routes/profiles.py::extend_profile` now wrap their system text
+  in a content block with `cache_control={"type": "ephemeral"}`.
+  Anthropic caches at ≥1024 tokens; the planner's per-process opus
+  fan-out (10-15 calls/build with the same system) sees the biggest
+  win — repeats inside the 5-min window read at ~10% of full input
+  price. `agents/research.py::synthesize_profile` already had it from
+  PR 0.7.0.
+- **`tests/unit/test_planner.py::_FakeMessages`** — fake Anthropic
+  client now supports `.stream()` returning a `_FakeStream` context
+  manager with `text_stream` + `get_final_message()`, so unit tests
+  exercise the same streaming path production uses.
+- **`tests/unit/test_observability_otlp.py`** — `clarion_env()` test
+  assertions updated from "prod" → "dev" (the env-unification default
+  from 0.7.0). New comment documents the per-customer-isolated
+  promotion path.
+
+### Fixed
+
+- **`observability/health._probe_anthropic`** — Anthropic's
+  statuspage moved from `status.anthropic.com` to `status.claude.com`
+  via a 302 redirect. Added `follow_redirects=True`. Mirrored on the
+  Grafana Cloud probe defensively.
+
+### Verification
+
+- Migrations 0007–0010 applied cleanly against the running postgres.
+- `pytest tests/` — 57 passed, 8 skipped.
+- Round-trip smoke tests on `AgentToolCallRepo`, `PolicyViolationRepo`
+  (cost_spike + output_too_long + high_attempt_count detectors all
+  recorded rows), `SystemHealthRepo` (one tick → 3 rows across
+  postgres/anthropic/grafana_cloud, all `healthy`).
+- `/api/health/services` returns all three deps `healthy` with sane
+  latency_ms.
+- Caterpillar build hard-reaped from a previous source edit triggering
+  uvicorn `--reload` mid-run; lesson: never edit `.py` files inside a
+  pipeline window. Markdown and SQL are safe.
+
+### Outstanding (queued, not in this version)
+
+- **GCX alert rules (P3 in the brief)**. The three alert rule JSON
+  bodies (critical violation, weekly LLM spend > $20, service down)
+  are spec'd in the brief — they ship out-of-tree via GCX once the
+  Grafana SE has the demo open.
+- **Wiring `track_tool_call`** into specific call sites
+  (`fetcher.fetch_one`, the planner's KG writes, the `gcx` subprocess
+  invocations from `kg_publish`). The infrastructure is in place; the
+  per-callsite wraps land in v0.8.1.
+- **UI surface for `system_health`** — a small dependency-chip row in
+  the topbar would be a natural follow-up; for now the data is in
+  Grafana panels via the Postgres datasource.
+
+---
+
+## [0.7.0] — AI observability instrumentation + asserts_env unification (2026-05-18)
+
+Two pieces, landed together so the AI-obs demo story is coherent end-to-end:
+
+1. **Full Gen AI semantic-convention instrumentation** of every Anthropic SDK
+   call, persisted to Postgres alongside the existing Sigil Generation records.
+2. **Fix `asserts_env` regression** where entity emitters defaulted to the
+   per-customer slug instead of the canonical `CLARION_ASSERTS_ENV` value,
+   causing KG entities to live under `env=caterpillar` while spans / metrics
+   went to `env=dev`. The new default unifies them.
+
+### Added
+- **`observability/llm_client.py`** — unified Anthropic call wrapper. Emits
+  `gen_ai.chat {model}` spans with the full `gen_ai.*` semantic-convention
+  attribute set + Clarion enrichment (`clarion.pipeline.phase`,
+  `clarion.prompt.template`, `clarion.llm.cost_usd`,
+  `clarion.llm.cache_savings_usd`, `clarion.context.utilization_pct`,
+  `gen_ai.ttft_ms` on streaming calls). Routes through Sigil so existing
+  Generation records still flow. Non-streaming `call_anthropic` +
+  streaming `stream_anthropic`; `MODEL_PRICES` covers `claude-opus-4-7` +
+  `claude-haiku-4-5`.
+- **`observability/evals.py`** — structural evals. `run_research_evals`
+  (3 checks: source_count_ge_3, profile_json_complete,
+  organizational_model_present). `run_plan_evals` (7 checks including
+  plan_json_schema_valid, kg_node/edge_count_ge_5, has_dashboards,
+  has_alerts, incident_has_events, no_hallucinated_services). Persists
+  to `llm_evals` + emits a `clarion.eval` span event.
+- **`storage/migrations/0005_llm_calls.sql`** — per-call cost + token +
+  template + cache rows; FK to `pipelines` with `ON DELETE SET NULL` so
+  cost history survives pipeline delete.
+- **`storage/migrations/0006_llm_evals.sql`** — per-eval row + structured
+  `details` JSONB.
+- **`LlmCallRepo` + `LlmEvalRepo`** in `storage/repositories.py` + exports.
+- **Pipeline-phase context propagation** — `api/pipeline.py::_spawn` injects
+  `CLARION_PIPELINE_ID` + `CLARION_PIPELINE_PHASE` env vars per subprocess.
+  `llm_client` reads them into ContextVars → stamps every span as
+  `clarion.pipeline.id` / `clarion.pipeline.phase`.
+- **`ui/src/pages/About.tsx`** — refreshed observability-stack table to
+  reflect the 7 wired layers; added `llm_calls` + `llm_evals` to the
+  data-model table; demo-flow steps 3 + 4 rewritten around the new cost +
+  phase attrs; hero CTA links to `/docs/ai-obs`.
+- **`ui/src/pages/Docs.tsx`** — new page at `/docs/ai-obs` with a 6-step
+  copy-pasteable recipe for instrumenting any 3rd-party Claude SDK app.
+- **`ui/src/App.tsx`** + **`ui/src/components/Layout.tsx`** — `/docs/ai-obs`
+  route + Docs entry in the secondary nav.
+
+### Changed
+- **`agents/research.py`**, **`agents/planner.py`**,
+  **`agents/external_sources/extractor.py`**,
+  **`api/routes/profiles.py`** — all non-streaming Anthropic call sites
+  now route through `llm_client.call_anthropic`.
+- **`api/routes/agents.py`** — streaming endpoints route through
+  `llm_client.stream_anthropic` (records `ttft_ms`).
+- **`sigil_helper.py`** — now invoked from inside `llm_client` (Sigil still
+  works; OTel wraps it).
+- **`observability/otlp.py`** — `_DEFAULT_ENV` and
+  `_DEFAULT_DEPLOYMENT_ENVIRONMENT` both set to `"dev"`. `clarion_env()`
+  + `clarion_environment()` read `CLARION_ASSERTS_ENV` / `CLARION_ENVIRONMENT`
+  with `"dev"` as the floor. `clarion_resource()` stamps both onto the OTel
+  Resource so every span/metric/log carries them. `llm_client` also stamps
+  `deployment.environment` as a per-span attr so TraceQL can filter on
+  `span.deployment.environment`.
+- **`.env.example`** + **`api/cloud_creds.py`** — env-var docs updated; promote
+  to prod with `CLARION_ENVIRONMENT=prod CLARION_ASSERTS_ENV=prod`.
+
+### Fixed
+- **`kg_publish/emitter.py` `EntityEmitter.__init__`** — `self._env`
+  previously fell back to the customer slug when the `env` arg was None,
+  bypassing `CLARION_ASSERTS_ENV`. Verified live on the Caterpillar
+  smoke run: pre-fix kg-publish emitted `asserts_env=caterpillar`,
+  post-fix manual republish emitted `asserts_env=dev`. The fix imports
+  `clarion_env()` at construction time so the canonical default flows
+  through every emitter (RED / log / entity).
+- **`cli/main.py` `kg publish` command** — pre-fix `effective_env`
+  shown in the start panel fell back to the customer slug too; now it
+  also resolves via `clarion_env()` so the panel readout and the
+  emitter agree.
+- **`kg_publish/log_emitter.py`** — comment block warning against
+  shadowing `asserts.env` with `clarion_env()` was inverted from the new
+  design; updated to describe the unified-env model.
+
+### Verified end-to-end (Caterpillar smoke, pipeline 1a806113dc78)
+- **`llm_calls` per-phase rollup**:
+  - research:  4 calls,  $0.8961 (synthesize wrote 10,313 cache tokens)
+  - plan:     12 calls,  $3.2857 (8 per-process opus calls — b2b_industrial
+              archetype fanout: dealer-parts-fulfillment, power-energy,
+              mining-fleet-telemetry, construction-machine, cat-financial,
+              emissions-compliance, distributor-channel)
+  - TOTAL:    16 calls,  $4.1817
+- **`llm_evals`**: 10 evals recorded (3 research + 7 plan); 9 PASS, 1 partial
+  (`profile_json_complete` score=3 — `tech_stack_signals` empty for the same
+  honest-empty reason as Hyster). `no_hallucinated_services` score=79.
+- **Archetype classification**: `b2b_industrial`, confidence=high,
+  fallback_used=False. Rationale cited the 10-K's "41 US + 109 non-US
+  dealers serving 190 countries" + "four business units". 15
+  business_entity_candidates extracted.
+- **`asserts_env` post-fix**: manual `kg publish 537f3a87` panel + emitter
+  output `customer=caterpillar  asserts_env=dev  asserts_site=demo`.
+
+### Outstanding (deferred to user-side UI verification)
+- **Tempo TraceQL** — stack-management API token not in `.env`; queries to
+  run in the Grafana Cloud UI:
+  - `{ resource.service.name = "proj-clarion" && resource.deployment.environment = "dev" && span.gen_ai.system = "anthropic" }`
+  - `{ span.clarion.llm.cost_usd > 0 }`
+  - `{ span.gen_ai.ttft_ms > 0 }`  (streaming-only — fires on `/api/agents/*`, not the main pipeline)
+  - `{ span.clarion.pipeline.phase = "plan" }`
+- **Asserts entity graph** under `env=dev` — old `env=caterpillar` entities
+  from the in-flight pipeline's pre-fix kg-publish will age out per TTL;
+  the manual republish has already re-emitted under `env=dev`.
+- **Runaway kg-publish processes** from prior sessions (pids 37204, 41648,
+  3571) still emitting under their old per-customer env scoping — leave
+  alone for now; they'll exit on their own demo TTL or can be SIGTERMed
+  in a follow-up sweep.
+
+### Caveats
+- OpenLIT also auto-instruments Anthropic → two `gen_ai` spans per call
+  (OpenLIT's + ours). Intentional, joined by trace_id. Can disable
+  OpenLIT's Anthropic instrumentor if too noisy.
+- Streaming `final_message` is best-effort; some SDK versions skip it.
+  `ttft_ms` is still recorded.
+- Spans never carry prompt or completion text — all `clarion.*` LLM
+  attributes are numeric (cost, token counts, latency).
+
+
 ## [0.6.5] — Pod → Node connection (built-in `Node HOSTS Pod` relation)
 
 Per Grafana Assistant's diagnosis: the built-in KubeGraph already declares
@@ -659,7 +902,7 @@ Pushed AcmeRetail plan via `just provision 1a7a1fad --push`:
 - 3 dashboards (Business Health, Technical Health, Pivot) landed
 - 18 alert rules pushed; all `alrt-*` UIDs preserved; all reference the
   new `proj-clarion-local` Postgres datasource
-- Datasource `proj-clarion-local` (uid `bfldsfhng9i4ge`) provisioned via
+- Datasource `proj-clarion-local` (uid auto-assigned) provisioned via
   `gcx api /api/datasources -X POST` with `pdcInjected: true`
 
 ### Carryover / known limits

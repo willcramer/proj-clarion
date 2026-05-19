@@ -17,7 +17,7 @@
  * `aria-current="step"` attribute on the active step.
  */
 import {
-  CheckCircle2, Loader2, Circle, AlertCircle, MinusCircle,
+  CheckCircle2, Loader2, Circle, AlertCircle, MinusCircle, X,
   type LucideIcon,
 } from "lucide-react";
 import { type PhaseState, type PhaseStatus } from "@/lib/PipelineContext";
@@ -88,6 +88,12 @@ export type PipelineStepperProps = {
   onStepClick?: (phase: PipelinePhase) => void;
   /** When set, this phase gets the `aria-current="step"` marker. */
   focusedPhase?: PipelinePhase | null;
+  /** Optional cancel hook. When provided, a small × button appears on
+   *  the currently-running phase. Clicking it asks the caller to stop
+   *  the build — phases are sequential so today this is equivalent to
+   *  cancelling the whole pipeline. If/when the orchestrator gains true
+   *  skip-and-continue semantics we'll branch in the caller. */
+  onPhaseCancel?: (phase: PipelinePhase) => void;
 };
 
 export function PipelineStepper({
@@ -95,6 +101,7 @@ export function PipelineStepper({
   metrics,
   onStepClick,
   focusedPhase,
+  onPhaseCancel,
 }: PipelineStepperProps) {
   const metricsByPhase = new Map(metrics?.map((m) => [m.phase, m]) ?? []);
 
@@ -122,6 +129,7 @@ export function PipelineStepper({
               metric={m}
               focused={focusedPhase === phase}
               onClick={onStepClick}
+              onCancel={onPhaseCancel}
               connectorAfter={!last}
             />
           );
@@ -142,6 +150,7 @@ export function PipelineStepper({
                 metric={m}
                 focused={focusedPhase === phase}
                 onClick={onStepClick}
+                onCancel={onPhaseCancel}
               />
             </li>
           );
@@ -154,7 +163,7 @@ export function PipelineStepper({
 // ─── Horizontal step (desktop) ──────────────────────────────────────
 
 function Step({
-  phase, index, status, metric, focused, onClick, connectorAfter,
+  phase, index, status, metric, focused, onClick, onCancel, connectorAfter,
 }: {
   phase: PipelinePhase;
   index: number;
@@ -162,11 +171,17 @@ function Step({
   metric?: PhaseMetric;
   focused: boolean;
   onClick?: (p: PipelinePhase) => void;
+  onCancel?: (p: PipelinePhase) => void;
   connectorAfter: boolean;
 }) {
   const Icon = STATUS_TO_ICON[status];
   const tone = STATUS_TO_TONE[status];
   const interactive = !!onClick;
+  // Cancel ×: only meaningful for the phase that's actively running.
+  // Done/failed/skipped/pending phases hide it. Caller must opt in via
+  // `onPhaseCancel` so non-live surfaces (history view, plan detail's
+  // small stepper) don't get a destructive control.
+  const cancellable = !!onCancel && status === "running";
 
   // Compose the step button + the trailing connector line as a single
   // <li> so flex stretching distributes them evenly.
@@ -176,37 +191,60 @@ function Step({
       aria-current={focused ? "step" : undefined}
       className="flex-1 flex items-center min-w-0"
     >
-      <button
-        type="button"
-        disabled={!interactive}
-        onClick={() => interactive && onClick?.(phase)}
-        className={cn(
-          "group flex flex-col items-center gap-1.5 w-full px-2 py-1.5 rounded-lg transition-colors",
-          interactive && "hover:bg-white/[0.03] cursor-pointer",
-          focused && "bg-white/[0.04]",
-        )}
-        aria-label={`Phase ${index}: ${PHASE_LABELS[phase]}, ${status}`}
-      >
-        <span
+      <div className="relative w-full">
+        <button
+          type="button"
+          disabled={!interactive}
+          onClick={() => interactive && onClick?.(phase)}
           className={cn(
-            "w-7 h-7 rounded-full flex items-center justify-center ring-2 transition-shadow",
-            tone.circle,
-            tone.ring,
-            focused && "ring-offset-2 ring-offset-[var(--color-canvas)]",
+            "group flex flex-col items-center gap-1.5 w-full px-2 py-1.5 rounded-lg transition-colors",
+            interactive && "hover:bg-white/[0.03] cursor-pointer",
+            focused && "bg-white/[0.04]",
           )}
+          aria-label={`Phase ${index}: ${PHASE_LABELS[phase]}, ${status}`}
         >
-          <Icon
-            size={14}
-            aria-hidden="true"
-            className={status === "running" ? "animate-spin" : undefined}
-          />
-        </span>
-        <span className={cn("text-[11px] font-medium tracking-wide", tone.label)}>
-          <span className="font-mono opacity-60 mr-1">{index}</span>
-          {PHASE_LABELS[phase]}
-        </span>
-        {metric && <StepStats metric={metric} />}
-      </button>
+          <span
+            className={cn(
+              "w-7 h-7 rounded-full flex items-center justify-center ring-2 transition-shadow",
+              tone.circle,
+              tone.ring,
+              focused && "ring-offset-2 ring-offset-[var(--color-canvas)]",
+            )}
+          >
+            <Icon
+              size={14}
+              aria-hidden="true"
+              className={status === "running" ? "animate-spin" : undefined}
+            />
+          </span>
+          <span className={cn("text-[11px] font-medium tracking-wide", tone.label)}>
+            <span className="font-mono opacity-60 mr-1">{index}</span>
+            {PHASE_LABELS[phase]}
+          </span>
+          {metric && <StepStats metric={metric} />}
+        </button>
+        {/* Cancel × overlay, positioned over the upper-right of the
+            step circle. Sibling-of-button rather than nested so the
+            outer button doesn't swallow the click. Live phase only. */}
+        {cancellable && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onCancel?.(phase); }}
+            aria-label={`Cancel ${PHASE_LABELS[phase]} phase (stops the build)`}
+            title="Cancel build"
+            className={cn(
+              "absolute top-0.5 right-[calc(50%-22px)]",
+              "w-5 h-5 rounded-full flex items-center justify-center",
+              "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
+              "border border-[color:var(--color-danger)]/40",
+              "hover:bg-[var(--color-danger)] hover:text-white transition-colors",
+              "shadow-sm",
+            )}
+          >
+            <X size={11} strokeWidth={2.5} aria-hidden="true" />
+          </button>
+        )}
+      </div>
       {connectorAfter && (
         <span
           aria-hidden="true"
@@ -223,7 +261,7 @@ function Step({
 // ─── Vertical step row (mobile) ─────────────────────────────────────
 
 function StepRow({
-  phase, index, status, metric, focused, onClick,
+  phase, index, status, metric, focused, onClick, onCancel,
 }: {
   phase: PipelinePhase;
   index: number;
@@ -231,48 +269,71 @@ function StepRow({
   metric?: PhaseMetric;
   focused: boolean;
   onClick?: (p: PipelinePhase) => void;
+  onCancel?: (p: PipelinePhase) => void;
 }) {
   const Icon = STATUS_TO_ICON[status];
   const tone = STATUS_TO_TONE[status];
   const interactive = !!onClick;
+  const cancellable = !!onCancel && status === "running";
 
   return (
-    <button
-      type="button"
-      disabled={!interactive}
-      onClick={() => interactive && onClick?.(phase)}
-      aria-label={`Phase ${index}: ${PHASE_LABELS[phase]}, ${status}`}
-      className={cn(
-        "w-full flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors text-left",
-        "border-[var(--color-border)] bg-[var(--color-canvas-elev1)]",
-        interactive && "hover:border-[var(--color-border-strong)] cursor-pointer",
-        focused && "border-[var(--color-accent-border)] bg-[var(--color-accent-bg)]",
-      )}
-    >
-      <span
+    <div className="relative">
+      <button
+        type="button"
+        disabled={!interactive}
+        onClick={() => interactive && onClick?.(phase)}
+        aria-label={`Phase ${index}: ${PHASE_LABELS[phase]}, ${status}`}
         className={cn(
-          "w-7 h-7 rounded-full flex items-center justify-center ring-2 shrink-0",
-          tone.circle, tone.ring,
+          "w-full flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors text-left",
+          "border-[var(--color-border)] bg-[var(--color-canvas-elev1)]",
+          interactive && "hover:border-[var(--color-border-strong)] cursor-pointer",
+          focused && "border-[var(--color-accent-border)] bg-[var(--color-accent-bg)]",
+          // Reserve right-edge space for the × so the label doesn't crowd it.
+          cancellable && "pr-10",
         )}
       >
-        <Icon
-          size={14}
-          aria-hidden="true"
-          className={status === "running" ? "animate-spin" : undefined}
-        />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className={cn("text-sm font-medium", tone.label)}>
-          <span className="font-mono opacity-60 mr-1.5">{index}</span>
-          {PHASE_LABELS[phase]}
-        </div>
-        {metric && (
-          <div className="text-[11px] text-[var(--color-text-faint)] mt-0.5">
-            <StepStats metric={metric} inline />
+        <span
+          className={cn(
+            "w-7 h-7 rounded-full flex items-center justify-center ring-2 shrink-0",
+            tone.circle, tone.ring,
+          )}
+        >
+          <Icon
+            size={14}
+            aria-hidden="true"
+            className={status === "running" ? "animate-spin" : undefined}
+          />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className={cn("text-sm font-medium", tone.label)}>
+            <span className="font-mono opacity-60 mr-1.5">{index}</span>
+            {PHASE_LABELS[phase]}
           </div>
-        )}
-      </div>
-    </button>
+          {metric && (
+            <div className="text-[11px] text-[var(--color-text-faint)] mt-0.5">
+              <StepStats metric={metric} inline />
+            </div>
+          )}
+        </div>
+      </button>
+      {cancellable && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCancel?.(phase); }}
+          aria-label={`Cancel ${PHASE_LABELS[phase]} phase (stops the build)`}
+          title="Cancel build"
+          className={cn(
+            "absolute top-1/2 right-2 -translate-y-1/2",
+            "w-6 h-6 rounded-full flex items-center justify-center",
+            "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
+            "border border-[color:var(--color-danger)]/40",
+            "hover:bg-[var(--color-danger)] hover:text-white transition-colors",
+          )}
+        >
+          <X size={12} strokeWidth={2.5} aria-hidden="true" />
+        </button>
+      )}
+    </div>
   );
 }
 

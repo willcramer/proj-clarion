@@ -62,16 +62,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     import asyncio
     sweeper = asyncio.create_task(reap_expired_demo_sessions())
 
+    # System health heartbeat: probes postgres/anthropic/grafana_cloud
+    # every minute, writes to system_health. Shares the event loop with
+    # the sweeper. Cancellation propagates cleanly through asyncio.sleep.
+    from proj_clarion.observability.health import heartbeat_loop
+    heartbeat = asyncio.create_task(heartbeat_loop())
+
     try:
         yield
     finally:
-        # Clean shutdown of the sweeper. It's a tight while-True with a
-        # 60s sleep; cancelling drops out of the sleep cleanly.
-        sweeper.cancel()
-        try:
-            await sweeper
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        # Clean shutdown of both background tasks. Each is a tight loop
+        # with an asyncio.sleep; cancelling drops out cleanly.
+        for task in (sweeper, heartbeat):
+            task.cancel()
+        for task in (sweeper, heartbeat):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
 
 app = FastAPI(

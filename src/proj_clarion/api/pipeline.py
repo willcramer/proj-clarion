@@ -38,18 +38,32 @@ PROFILES_DIR = PROJECT_ROOT / "data" / "profiles"
 # ─── Phase machinery ─────────────────────────────────────────────────
 
 
-async def _spawn(argv: list[str]) -> tuple[asyncio.subprocess.Process, asyncio.Queue[str | None]]:
+async def _spawn(
+    argv: list[str],
+    *,
+    phase: str | None = None,
+    pipeline_id: str | None = None,
+) -> tuple[asyncio.subprocess.Process, asyncio.Queue[str | None]]:
     """Start a CLI subprocess with the project root as cwd and stream stdout
     into a queue. Sentinel `None` is enqueued at EOF.
 
     Resolved Mode-A creds are injected so any phase that emits OTel data
     (generate / kg-publish / live-tail) targets Alloy automatically when
     Alloy is running, and falls back to direct-to-Cloud otherwise.
+
+    `phase` and `pipeline_id` are exported as `CLARION_PIPELINE_PHASE` /
+    `CLARION_PIPELINE_ID` so the LLM wrapper inside the subprocess can
+    stamp them onto every gen_ai span without explicit plumbing through
+    every CLI command.
     """
     env = os.environ.copy()
     creds = resolve_cloud_creds()
     if creds:
         env.update(creds)
+    if phase:
+        env["CLARION_PIPELINE_PHASE"] = phase
+    if pipeline_id:
+        env["CLARION_PIPELINE_ID"] = pipeline_id
 
     proc = await asyncio.create_subprocess_exec(
         *argv,
@@ -75,13 +89,13 @@ async def _spawn(argv: list[str]) -> tuple[asyncio.subprocess.Process, asyncio.Q
 
 
 async def _run_to_completion(
-    phase: str, argv: list[str],
+    phase: str, argv: list[str], *, pipeline_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run a CLI subprocess to completion, yielding log events. Raises on
     non-zero exit so the orchestrator can convert that into a phase-failed
     event."""
     yield {"event": "log", "phase": phase, "line": f"$ {' '.join(shlex.quote(a) for a in argv)}"}
-    proc, queue = await _spawn(argv)
+    proc, queue = await _spawn(argv, phase=phase, pipeline_id=pipeline_id)
     while True:
         item = await queue.get()
         if item is None:
@@ -94,6 +108,7 @@ async def _run_to_completion(
 
 async def _run_until_marker(
     phase: str, argv: list[str], marker: str, timeout_seconds: float = 120.0,
+    *, pipeline_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run a long-running CLI subprocess (e.g. kg-publish) and yield log
     events until a known marker line is seen on stdout. After that the
@@ -106,7 +121,7 @@ async def _run_until_marker(
     in /runs and act on it.
     """
     yield {"event": "log", "phase": phase, "line": f"$ {' '.join(shlex.quote(a) for a in argv)}"}
-    proc, queue = await _spawn(argv)
+    proc, queue = await _spawn(argv, phase=phase, pipeline_id=pipeline_id)
     start = asyncio.get_event_loop().time()
     while True:
         try:
@@ -129,7 +144,9 @@ async def _run_until_marker(
 # ─── Phase implementations ───────────────────────────────────────────
 
 
-async def _phase_research(url: str, company: str | None) -> AsyncIterator[dict[str, Any]]:
+async def _phase_research(
+    url: str, company: str | None, *, pipeline_id: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     """Run the research agent against a URL. After it completes, find the
     newly-created profile JSON and surface its profile_id."""
     yield {"event": "phase", "phase": "research", "status": "started",
@@ -141,7 +158,7 @@ async def _phase_research(url: str, company: str | None) -> AsyncIterator[dict[s
     argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main", "research", url]
     if company:
         argv += ["--company", company]
-    async for ev in _run_to_completion("research", argv):
+    async for ev in _run_to_completion("research", argv, pipeline_id=pipeline_id):
         yield ev
 
     new_profile = _newest_new_profile(before)
@@ -155,10 +172,17 @@ async def _phase_research(url: str, company: str | None) -> AsyncIterator[dict[s
 
 async def _phase_plan(
     profile_path: str, *, volume_per_day: int | None = None,
+    pipeline_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run the planner against the just-produced profile. After it
-    completes, find the newest plan in the DB whose source_profile_id
-    matches our profile.
+    """Run the planner against the just-produced profile.
+
+    Consolidation behavior: if this profile already has a plan in the
+    DB, the planner still produces a fresh plan with a new UUID (the
+    agent doesn't know it's a re-run), and we transplant its content
+    into the existing plan's plan_id. This keeps one plan per profile
+    so SEs aren't drowning in duplicates after every extend → re-run
+    cycle, and downstream refs (kg_nodes, business_events, plan_audit_log)
+    stay anchored on a stable id.
 
     `volume_per_day` is forwarded to the planner CLI so the SE can
     scale demo volume from the build form without editing code."""
@@ -167,18 +191,32 @@ async def _phase_plan(
         msg += f" (volume override: {volume_per_day:,}/day)"
     yield {"event": "phase", "phase": "plan", "status": "started", "message": msg}
 
+    profile_id = Path(profile_path).stem
+    existing_plan_id = _stable_plan_id_for_profile(profile_id)
+
     argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main",
             "plan", "run", profile_path]
     if volume_per_day is not None:
         argv += ["--volume-per-day", str(volume_per_day)]
-    async for ev in _run_to_completion("plan", argv):
+    async for ev in _run_to_completion("plan", argv, pipeline_id=pipeline_id):
         yield ev
 
-    plan_id = _newest_plan_for_profile(Path(profile_path).stem)
-    if plan_id is None:
+    new_plan_id = _newest_plan_for_profile(profile_id)
+    if new_plan_id is None:
         raise RuntimeError("plan run completed but no new plan in the DB")
 
-    yield {"event": "phase", "phase": "plan", "status": "done", "plan_id": plan_id}
+    # If this profile already had a plan, replace its content rather
+    # than letting the new UUID compound the duplicate count.
+    final_plan_id = new_plan_id
+    if existing_plan_id and existing_plan_id != new_plan_id:
+        _consolidate_plan_content(existing_plan_id, new_plan_id)
+        final_plan_id = existing_plan_id
+        yield {
+            "event": "log", "phase": "plan",
+            "line": f"reused plan_id {existing_plan_id[:8]} (replaced content from {new_plan_id[:8]})",
+        }
+
+    yield {"event": "phase", "phase": "plan", "status": "done", "plan_id": final_plan_id}
 
 
 async def _phase_approve(plan_id: str) -> AsyncIterator[dict[str, Any]]:
@@ -205,18 +243,22 @@ async def _phase_approve(plan_id: str) -> AsyncIterator[dict[str, Any]]:
     yield {"event": "phase", "phase": "approve", "status": "done", "plan_id": plan_id}
 
 
-async def _phase_generate(plan_id: str, days: int) -> AsyncIterator[dict[str, Any]]:
+async def _phase_generate(
+    plan_id: str, days: int, *, pipeline_id: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     """Generate events into Postgres + traces to Cloud (via Alloy if up)."""
     yield {"event": "phase", "phase": "generate", "status": "started",
            "message": f"Generating {days} day(s) of events"}
     argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main",
             "generate", "run", plan_id, "--days", str(days), "--anchor-now"]
-    async for ev in _run_to_completion("generate", argv):
+    async for ev in _run_to_completion("generate", argv, pipeline_id=pipeline_id):
         yield ev
     yield {"event": "phase", "phase": "generate", "status": "done"}
 
 
-async def _phase_provision(plan_id: str) -> AsyncIterator[dict[str, Any]]:
+async def _phase_provision(
+    plan_id: str, *, pipeline_id: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     """Push dashboards + alert rules to Cloud.
 
     `--sweep-orphans` is the default on the CLI, so each provision push
@@ -226,7 +268,7 @@ async def _phase_provision(plan_id: str) -> AsyncIterator[dict[str, Any]]:
            "message": "Pushing dashboards + alerts to Cloud (with orphan sweep)"}
     argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main",
             "provision", "run", plan_id, "--push"]
-    async for ev in _run_to_completion("provision", argv):
+    async for ev in _run_to_completion("provision", argv, pipeline_id=pipeline_id):
         yield ev
     # Audit entry — what was created in Cloud, with a clickable URL to
     # the folder so an SE can jump straight to "show me the dashboards
@@ -236,7 +278,9 @@ async def _phase_provision(plan_id: str) -> AsyncIterator[dict[str, Any]]:
     yield {"event": "phase", "phase": "provision", "status": "done"}
 
 
-async def _phase_kg_publish(plan_id: str) -> AsyncIterator[dict[str, Any]]:
+async def _phase_kg_publish(
+    plan_id: str, *, pipeline_id: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     """Push KG model rules + start the entity emitter detached. Pipeline
     advances once the emitter has logged `kg_emitter.start` — we don't
     wait for the long-running process to exit."""
@@ -244,7 +288,9 @@ async def _phase_kg_publish(plan_id: str) -> AsyncIterator[dict[str, Any]]:
            "message": "Pushing KG rules and starting the entity emitter"}
     argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main",
             "kg", "publish", plan_id]
-    async for ev in _run_until_marker("kg-publish", argv, marker="kg_emitter.start"):
+    async for ev in _run_until_marker(
+        "kg-publish", argv, marker="kg_emitter.start", pipeline_id=pipeline_id,
+    ):
         yield ev
     _audit_cloud_creates_kg_publish(plan_id)
     yield {"event": "phase", "phase": "kg-publish", "status": "done",
@@ -343,6 +389,7 @@ async def run_demo_pipeline(
     profile_path: str | None = None,
     plan_id: str | None = None,
     volume_per_day: int | None = None,
+    pipeline_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """The whole flow, or any tail of it.
 
@@ -445,7 +492,7 @@ async def run_demo_pipeline(
         # the early-exit ceiling (stop_idx). When stop_after_phase is
         # set to "research", we research and bail — no plan/approve/etc.
         if start_idx <= _phase_idx("research") <= stop_idx:
-            async for ev in pipe(_phase_research(url, company)):
+            async for ev in pipe(_phase_research(url, company, pipeline_id=pipeline_id)):
                 yield ev
                 if ev.get("event") == "phase" and ev.get("status") == "done":
                     profile_id = ev.get("profile_id") or profile_id
@@ -454,7 +501,7 @@ async def run_demo_pipeline(
         if start_idx <= _phase_idx("plan") <= stop_idx:
             assert profile_path is not None  # validated above
             async for ev in pipe(_phase_plan(
-                profile_path, volume_per_day=volume_per_day,
+                profile_path, volume_per_day=volume_per_day, pipeline_id=pipeline_id,
             )):
                 yield ev
                 if ev.get("event") == "phase" and ev.get("status") == "done":
@@ -467,17 +514,17 @@ async def run_demo_pipeline(
 
         if start_idx <= _phase_idx("generate") <= stop_idx:
             assert plan_id is not None
-            async for ev in pipe(_phase_generate(plan_id, days)):
+            async for ev in pipe(_phase_generate(plan_id, days, pipeline_id=pipeline_id)):
                 yield ev
 
         if start_idx <= _phase_idx("provision") <= stop_idx:
             assert plan_id is not None
-            async for ev in pipe(_phase_provision(plan_id)):
+            async for ev in pipe(_phase_provision(plan_id, pipeline_id=pipeline_id)):
                 yield ev
 
         if start_idx <= _phase_idx("kg-publish") <= stop_idx:
             assert plan_id is not None
-            async for ev in pipe(_phase_kg_publish(plan_id)):
+            async for ev in pipe(_phase_kg_publish(plan_id, pipeline_id=pipeline_id)):
                 yield ev
 
     except Exception as exc:  # noqa: BLE001 — convert to event for the UI
@@ -541,3 +588,86 @@ def _newest_plan_for_profile(profile_id: str) -> str | None:
             {"pid": profile_id},
         ).fetchone()
     return row[0] if row else None
+
+
+def _stable_plan_id_for_profile(profile_id: str) -> str | None:
+    """The OLDEST existing plan_id for this profile, the slot we want
+    re-runs to consolidate INTO. Oldest because it's the one with the
+    longest lineage in kg_nodes / plan_audit_log / business_events;
+    replacing its content (instead of the newer dup) preserves more
+    of the foreign-key history. Returns None if the profile has no
+    existing plans yet."""
+    with session_scope() as s:
+        row = s.execute(
+            text("""
+                SELECT plan_id::text
+                FROM demo_plans
+                WHERE source_profile_id = :pid
+                ORDER BY created_at ASC
+                LIMIT 1
+            """),
+            {"pid": profile_id},
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _consolidate_plan_content(target_plan_id: str, new_plan_id: str) -> None:
+    """Replace `target_plan_id`'s plan_json with `new_plan_id`'s content,
+    then drop the new row. The target keeps its stable plan_id so
+    every kg_node / kg_edge / business_event / plan_audit_log row
+    that references the target stays valid; the new row's children
+    (none yet at this point, since only research + plan have run)
+    cascade-delete cleanly.
+
+    Resets the target's review_state back to DRAFT because the plan
+    content has materially changed. The approve phase the orchestrator
+    runs right after this will re-set it to APPROVED_FOR_PROVISION.
+
+    Also records a plan_audit_log entry so the SE can see in /audit
+    why a plan they thought was 'approved' suddenly went back to
+    'draft' (and what the new content is)."""
+    from copy import deepcopy
+    from uuid import UUID
+
+    from proj_clarion.schemas import ReviewState
+    from proj_clarion.storage import AuditRepo, PlanRepo, session_scope
+
+    with session_scope() as s:
+        repo = PlanRepo()
+        new_plan = repo.get(s, new_plan_id)
+        if new_plan is None:
+            raise RuntimeError(f"consolidate: new plan {new_plan_id} not found")
+        target = repo.get(s, target_plan_id)
+        if target is None:
+            raise RuntimeError(f"consolidate: target plan {target_plan_id} not found")
+
+        # Build the consolidated plan: new content, original id.
+        merged = deepcopy(new_plan)
+        merged_data = merged.model_dump()
+        merged_data["plan_id"] = UUID(target_plan_id)
+        merged_data["review_state"] = ReviewState.DRAFT.value
+        from proj_clarion.schemas import DemoPlan
+        consolidated = DemoPlan.model_validate(merged_data)
+
+        # Upsert flips the existing target row's plan_json to the new
+        # content. Delete the now-orphaned new row.
+        repo.upsert(s, consolidated)
+        repo.delete(s, new_plan_id)
+
+        # Audit: why the plan that was sitting at 'approved_for_provision'
+        # is suddenly 'draft' again. Plan re-runs (after profile extends)
+        # are the common cause; the note carries enough breadcrumbs for
+        # the SE to reconstruct.
+        actor = os.environ.get("USER", "unknown")
+        AuditRepo().record(
+            s, target_plan_id,
+            actor=actor,
+            action="plan_content_replaced",
+            from_state=str(target.review_state),
+            to_state=ReviewState.DRAFT.value,
+            note=(
+                f"Plan content replaced in-place by a fresh planner run "
+                f"(consolidated from {new_plan_id[:8]}). The approve "
+                f"phase will re-mark this APPROVED_FOR_PROVISION."
+            ),
+        )

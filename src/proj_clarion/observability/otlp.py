@@ -19,7 +19,15 @@ This module is the single source of truth:
     None when unset (callers fall back to console exporters or skip).
 
   - `clarion_env()` / `clarion_site()` — read `CLARION_ASSERTS_ENV` /
-    `CLARION_ASSERTS_SITE` with the v0.5 defaults ("prod" / "demo").
+    `CLARION_ASSERTS_SITE`. Used for Asserts entity scoping; the default
+    matches `clarion_environment()` ("dev") so the Asserts KG scope and
+    OTel deployment.environment stay in sync out of the box.
+
+  - `clarion_environment()` — read `CLARION_ENVIRONMENT` (default "dev").
+    This is the Clarion *deployment* stage (dev → staging → prod). Setting
+    `CLARION_ENVIRONMENT=prod` should typically be matched by
+    `CLARION_ASSERTS_ENV=prod` so KG entities, traces, metrics all roll up
+    under the same value.
 
 Add new shared helpers here rather than inlining them per-site.
 """
@@ -32,18 +40,31 @@ from opentelemetry.sdk.resources import Resource
 
 # Default values for asserts.* attributes when env isn't set. Match the
 # defaults in compose.yaml's environment block and .env.example.
-_DEFAULT_ENV = "prod"
+#
+# `_DEFAULT_ENV` and `_DEFAULT_DEPLOYMENT_ENVIRONMENT` are deliberately
+# the same string so out of the box, KG entities and OTel signals
+# share one env value. Promote both together by setting CLARION_ENVIRONMENT
+# and CLARION_ASSERTS_ENV to "prod".
+_DEFAULT_ENV = "dev"
 _DEFAULT_SITE = "demo"
+_DEFAULT_DEPLOYMENT_ENVIRONMENT = "dev"
 
 
 def clarion_env() -> str:
-    """asserts.env / deployment.environment value."""
+    """asserts.env value — customer-scoped (e.g. carhartt-prod)."""
     return os.environ.get("CLARION_ASSERTS_ENV", _DEFAULT_ENV)
 
 
 def clarion_site() -> str:
     """asserts.site value."""
     return os.environ.get("CLARION_ASSERTS_SITE", _DEFAULT_SITE)
+
+
+def clarion_environment() -> str:
+    """deployment.environment value for Clarion itself — `dev`, `staging`,
+    `prod`. Distinct from `clarion_env()` (asserts scoping per customer).
+    Defaults to `dev` until the deployment is promoted."""
+    return os.environ.get("CLARION_ENVIRONMENT", _DEFAULT_DEPLOYMENT_ENVIRONMENT)
 
 
 def otlp_endpoint() -> str | None:
@@ -111,12 +132,17 @@ def clarion_resource(
     """
     env_value = env if env is not None else clarion_env()
     site_value = site if site is not None else clarion_site()
+    deployment_env = clarion_environment()
 
     attrs: dict[str, str] = {
         "service.name":           service_name,
         "service.namespace":      "proj-clarion",
         "service.version":        service_version,
-        "deployment.environment": env_value,
+        # deployment.environment is Clarion's own stage (dev / staging / prod),
+        # NOT the per-customer asserts scope. Splitting these is required by
+        # OTel semantic conventions and lets a single shared Tempo separate
+        # dev-from-prod traffic regardless of customer.
+        "deployment.environment": deployment_env,
         "asserts.env":            env_value,
         "asserts.site":           site_value,
     }
@@ -132,6 +158,7 @@ def clarion_resource(
 
 __all__ = [
     "clarion_env",
+    "clarion_environment",
     "clarion_resource",
     "clarion_site",
     "otlp_endpoint",

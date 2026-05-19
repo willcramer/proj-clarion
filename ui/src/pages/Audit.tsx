@@ -17,14 +17,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { History, GitCommitHorizontal } from "lucide-react";
+import { History, GitCommitHorizontal, MessageCircle } from "lucide-react";
 
 import { Badge, type BadgeTone } from "@/components/Badge";
 import { Card } from "@/components/Card";
 import { Pagination } from "@/components/Pagination";
 import {
-  listDemoHistory, listPlanAudit,
-  type DemoHistoryRow, type GlobalAuditEntry,
+  listDemoHistory, listPlanAudit, listProfileAudit,
+  type DemoHistoryRow, type GlobalAuditEntry, type ProfileAuditEntry,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
@@ -39,13 +39,15 @@ export function AuditPage() {
           Activity &amp; history
         </h1>
         <p className="text-[var(--color-text-muted)] mt-1 text-sm max-w-2xl">
-          Every demo emitter that&rsquo;s spun up on this stack and every plan-state
-          transition. Each section pages independently, newest first.
+          Every demo emitter that&rsquo;s spun up on this stack, every plan-state
+          transition, and every profile extension. Each section pages independently,
+          newest first.
         </p>
       </header>
 
       <DemoHistorySection />
       <PlanChangesSection />
+      <ProfileChangesSection />
     </div>
   );
 }
@@ -309,6 +311,124 @@ function PlanChangeRow({ row }: { row: GlobalAuditEntry }) {
 // ──────────────────────────────────────────────────────────────────
 // Section header + empty state, shared across both sections
 // ──────────────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────────────
+// Section 3, Profile changes (extend research history)
+// ──────────────────────────────────────────────────────────────────
+
+function ProfileChangesSection() {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const offset = (page - 1) * pageSize;
+
+  const audit = useQuery({
+    queryKey: ["profile-audit-global", offset, pageSize],
+    queryFn: () => listProfileAudit({ limit: pageSize, offset }),
+    refetchInterval: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const rows = audit.data?.entries ?? [];
+  const total = audit.data?.total ?? 0;
+
+  return (
+    <section aria-label="Profile extend audit">
+      <SectionHeader
+        icon={MessageCircle}
+        title="Profile changes"
+        subtitle="Extend-research prompts and the additions they produced"
+        rightHint={audit.isLoading ? "Loading…" : `${total.toLocaleString()} total`}
+      />
+      <Card>
+        {audit.isLoading ? (
+          <div className="p-8 text-center text-[var(--color-text-faint)]">Loading…</div>
+        ) : total === 0 ? (
+          <EmptySection
+            icon={MessageCircle}
+            title="No profile extends recorded"
+            hint="Use the Extend research chat on any profile to add channels, signals, or entities. Each prompt is logged here."
+          />
+        ) : (
+          <>
+            <table className="w-full text-sm">
+              <thead className="text-[10px] text-[var(--color-text-faint)] uppercase tracking-wider font-mono border-b border-[var(--color-border)]">
+                <tr>
+                  <th className="text-left font-medium px-4 py-2.5">When</th>
+                  <th className="text-left font-medium px-4 py-2.5">Profile</th>
+                  <th className="text-left font-medium px-4 py-2.5">Prompt</th>
+                  <th className="text-left font-medium px-4 py-2.5">Summary</th>
+                  <th className="text-left font-medium px-4 py-2.5">Additions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <ProfileChangeRow key={r.audit_id} row={r} />
+                ))}
+              </tbody>
+            </table>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+            />
+          </>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function ProfileChangeRow({ row }: { row: ProfileAuditEntry }) {
+  const navigate = useNavigate();
+  const totalAdds = Object.values(row.additions).reduce((a, b) => a + b, 0);
+  return (
+    <tr
+      onClick={() => navigate(`/profiles/${row.profile_id}`)}
+      className={cn(
+        "border-b border-[var(--color-border)] last:border-0",
+        "hover:bg-white/[0.02] cursor-pointer transition-colors",
+        !row.applied && "opacity-70",
+      )}
+    >
+      <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] tabular-nums whitespace-nowrap">
+        {formatDateTime(row.timestamp)}
+      </td>
+      <td className="px-4 py-3 text-[var(--color-text)]">
+        {row.company ?? hostOf(row.url) ?? <span className="text-[var(--color-text-faint)]">—</span>}
+        <span className="ml-2 font-mono text-[11px] text-[var(--color-text-faint)]">
+          {row.profile_id}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] max-w-[280px] truncate" title={row.prompt}>
+        {row.prompt}
+      </td>
+      <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] max-w-[320px] truncate" title={row.summary}>
+        {row.summary}
+      </td>
+      <td className="px-4 py-3">
+        {!row.applied ? (
+          <Badge tone="neutral">no-op</Badge>
+        ) : totalAdds === 0 ? (
+          <Badge tone="neutral">empty</Badge>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(row.additions).map(([field, count]) => (
+              <span
+                key={field}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] bg-[var(--color-accent-bg)] text-[var(--color-accent)]"
+              >
+                +{count} {field.replace(/_/g, " ")}
+              </span>
+            ))}
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
 
 function SectionHeader({
   icon: Icon, title, subtitle, rightHint,

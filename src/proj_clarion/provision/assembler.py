@@ -213,22 +213,44 @@ def push_assets(
             _logger.warning("provision.dashboard.prune_failed",
                             folder_uid=assets.folder_uid, error=str(exc)[:200])
 
-    # Dashboards
+    # Dashboards. Each push is a `dashboard_provision` tool span so the
+    # AI-Obs Tools view shows per-dashboard latency / failure rate.
+    from proj_clarion.observability.tools import track_tool_call
     for dash in assets.dashboards:
         body = wrap_for_push(dash, assets.folder_uid)
-        client.post("/api/dashboards/db", body)
+        with track_tool_call(
+            agent_name="provision_agent",
+            tool_name="dashboard_provision",
+            provider_name="grafana_cloud",
+            target_system="grafana_cloud.dashboards",
+            action="POST /api/dashboards/db",
+            input_summary=str(dash.get("uid", "<no-uid>")),
+        ) as _tool:
+            client.post("/api/dashboards/db", body)
+            _tool["output"] = "ok"
         counts["dashboards"] += 1
 
-    # Alert rules — provisioning API is idempotent on UID via PUT
+    # Alert rules — provisioning API is idempotent on UID via PUT.
+    # One `alert_provision` tool span per rule.
     for rule in assets.alert_rules:
         try:
-            existing_rule = client.get(
-                f"/api/v1/provisioning/alert-rules/{rule['uid']}", allow_404=True
-            )
-            if existing_rule:
-                client.put(f"/api/v1/provisioning/alert-rules/{rule['uid']}", rule)
-            else:
-                client.post("/api/v1/provisioning/alert-rules", rule)
+            with track_tool_call(
+                agent_name="provision_agent",
+                tool_name="alert_provision",
+                provider_name="grafana_cloud",
+                target_system="grafana_cloud.alerts",
+                action="PUT/POST /api/v1/provisioning/alert-rules",
+                input_summary=rule["uid"],
+            ) as _tool:
+                existing_rule = client.get(
+                    f"/api/v1/provisioning/alert-rules/{rule['uid']}", allow_404=True
+                )
+                if existing_rule:
+                    client.put(f"/api/v1/provisioning/alert-rules/{rule['uid']}", rule)
+                    _tool["output"] = "updated"
+                else:
+                    client.post("/api/v1/provisioning/alert-rules", rule)
+                    _tool["output"] = "created"
             counts["alert_rules"] += 1
         except Exception as exc:  # noqa: BLE001
             _logger.warning("alert.push.failed", uid=rule["uid"], error=str(exc))

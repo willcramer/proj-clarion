@@ -10,6 +10,8 @@ import {
   Loader2,
   Menu,
   X,
+  Boxes,
+  BookOpen,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -41,6 +43,12 @@ const NAV = [
 export const SECONDARY_NAV = [
   { to: "/runs",  label: "Runs",  icon: Activity },
   { to: "/audit", label: "Audit", icon: History  },
+  // /about explains the project + arch + observability surfaces; useful
+  // in customer demos as a "what is this thing" landing surface.
+  { to: "/about", label: "About", icon: Boxes    },
+  // /docs/ai-obs is a six-step recipe for instrumenting any Claude SDK
+  // app — copy-pasteable code blocks linked from the About page hero.
+  { to: "/docs/ai-obs", label: "Docs", icon: BookOpen },
 ];
 
 export function Layout() {

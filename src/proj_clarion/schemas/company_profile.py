@@ -54,6 +54,71 @@ class Confidence(str, Enum):
     LOW = "low"
 
 
+class OrgArchetype(str, Enum):
+    """Observability-shaped organisational archetype.
+
+    Distinct from `BusinessModelArchetype` (which says "what kind of business" —
+    SaaS / retail / etc.). This says "what entity hierarchy does the KG use to
+    represent the company in a way that maps to dashboards, SLOs, and alerts."
+
+    The catalog is intentionally narrow: 8 named shapes + `GENERIC`. Each shape
+    pins down a top-down hierarchy where every level corresponds to a place a
+    business KPI lives. We deliberately exclude leaf granularity (individual
+    SKUs, individual clinicians, individual users) because those don't have
+    durable dashboards — the levels above them do.
+
+    `GENERIC` is the explicit fallback when the research agent can't classify
+    with confidence. The UI surfaces a warning chip when GENERIC is chosen so
+    the SE knows the demo is using a default entity model rather than a
+    vertical-tuned one."""
+
+    RETAIL                 = "retail"                  # Company -> Brand -> Region -> StoreClass -> ProductCategory
+    B2B_INDUSTRIAL         = "b2b_industrial"          # Company -> BusinessUnit -> DealerTier -> Territory -> ProductFamily
+    HEALTHCARE_PROVIDER    = "healthcare_provider"     # Company -> Facility -> Department -> ServiceLine
+    HEALTHCARE_PAYER       = "healthcare_payer"        # Company -> PlanType -> MemberCohort -> ProviderNetwork
+    SAAS                   = "saas"                    # Company -> PlanTier -> Region -> WorkspaceClass
+    FINANCIAL_SERVICES     = "financial_services"      # Company -> CustomerSegment -> ProductType -> Channel
+    MEDIA                  = "media"                   # Company -> Property -> AudienceSegment -> DistributionChannel
+    LOGISTICS              = "logistics"               # Company -> Hub -> RouteClass -> CustomerSegment -> ShipmentClass
+    GENERIC                = "generic"                 # Company -> BusinessUnit -> ProductLine -> CustomerSegment
+
+
+class OrganizationalModel(BaseModel):
+    """How the company's KG should be shaped for business observability.
+
+    This is the bridge between the Research output and the Plan agent: the
+    planner reads `archetype` and picks entity types from the matching catalog
+    rather than force-fitting retail conventions (brand / business_unit /
+    product_line) onto every customer.
+
+    `primary_entity_type` is always 'Company' OR 'Account' — never 'Brand'.
+    The customer's organisation itself sits at the top of the hierarchy; what
+    varies underneath is the archetype-specific node types.
+
+    `fallback_used` is True when the agent picked `GENERIC` because no named
+    archetype was a confident fit. The Profile UI shows a small warning chip
+    in that case so the SE knows the demo is shaped by defaults, not vertical
+    knowledge."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    archetype: OrgArchetype
+    archetype_confidence: Confidence
+    primary_entity_type: Literal["Company", "Account"] = "Company"
+    rationale: str = Field(
+        ..., max_length=600,
+        description="One paragraph: why this archetype fits the company. Cite "
+                    "specific evidence from the sources (e.g. 'dealer network', "
+                    "'hospital system', 'multi-tenant SaaS dashboard').",
+    )
+    fallback_used: bool = Field(
+        default=False,
+        description="True iff archetype==GENERIC was chosen as the explicit "
+                    "fallback. Surfaces a 'using defaults' warning in the UI.",
+    )
+    citations: list[CitationId] = Field(default_factory=list)
+
+
 class CompanyIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -276,6 +341,10 @@ class CompanyProfile(BaseModel):
     company: CompanyIdentity
     industry_taxonomy: IndustryTaxonomy
     revenue_signals: RevenueSignals
+    # Optional for back-compat: existing v0.1.0 profiles in the DB don't have
+    # this field. The plan agent treats `None` as "fall back to generic
+    # entity catalog". New research runs always populate it.
+    organizational_model: OrganizationalModel | None = None
     channels: list[Channel] = Field(default_factory=list)
     geographic_footprint: GeographicFootprint
     tech_stack_signals: list[TechStackSignal] = Field(default_factory=list)

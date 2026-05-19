@@ -6,13 +6,32 @@ Built for Grafana Solutions Engineers (or anyone) who needs to show a prospect "
 
 > Clarion only reads public information about a company. It never touches their real systems. Every dashboard it creates carries an "illustrative demo" disclaimer.
 
+## Architecture
+
+![Proj Clarion architecture](docs/arch.svg)
+
+A FastAPI orchestrator drives a six-phase pipeline through Anthropic Claude and a handful of free public sources (SEC EDGAR, GitHub orgs, Greenhouse, Lever, Wikidata). Outputs land in Postgres; an entity emitter pushes synthetic OTel telemetry to Grafana Cloud (Mimir / Loki / Tempo / Asserts / Dashboards / Alerts). Every LLM call is instrumented through a single wrapper (`observability/llm_client.py`) that emits `gen_ai.*` semantic-convention spans plus Clarion enrichment (cost, cache savings, TTFT, pipeline phase, prompt template) — so the **Grafana Cloud AI Observability** app sees the agent in full detail, and Clarion's own dashboard layers per-pipeline rollups on top.
+
 ## How it works
 
 1. You give Clarion a URL.
-2. Claude researches the company from public web sources.
-3. A planning agent designs a demo that fits the company's vertical (retail, airline, banking, SaaS, industrial, etc.).
+2. Claude researches the company from public web sources — homepage, SEC 10-K (item 1/1A/7), GitHub org if any, Greenhouse + Lever job boards, Wikidata.
+3. A planning agent classifies the company's organisational archetype (retail / b2b-industrial / healthcare-provider / saas / financial / media / logistics / generic) and designs a vertical-tuned demo.
 4. Synthetic telemetry flows to your Grafana Cloud stack.
 5. You get a live demo that looks like the prospect's own operations, ready in under 10 minutes.
+
+## What makes it different from the built-in Grafana AI Obs app
+
+The built-in AI Obs app gives you the **generic gen-AI layer**: spans in Tempo, token/cost metrics in Mimir, Anthropic call view. Clarion is the **operational story on top**:
+
+- **Per-pipeline rollups** — every span carries `clarion.pipeline.id` + `clarion.pipeline.phase`. The build is the unit of work.
+- **Cost by prompt template** — knowing which template costs the most, not just which model.
+- **Structural evals** (`llm_evals` table) — did the agent's output validate? The AI Obs app doesn't store that.
+- **Tool-call audit + policy violations** — cost spikes, runaway output, prompt-injection patterns, out-of-scope tool calls. The regulated-buyer audit story.
+- **System health heartbeat** — postgres / Anthropic / Grafana Cloud probed every 60s; visible alongside the agent's own behaviour.
+- **SE adoption KPIs** — none of this is in the AI Obs app; it's the business-side custom dashboard.
+
+The companion dashboard (`grafana/clarion-dashboard.json`-equivalent in your stack) demonstrates exactly this layering — five tabs (Overview / Pipelines / AI & LLM / Guardrails & Health / Adoption) telling the dev→prod readiness story over one shared OTLP stream.
 
 ## What you need
 
@@ -33,7 +52,7 @@ brew install just                                   # just (task runner)
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/<your-handle>/proj-clarion
+git clone https://github.com/imran4z/proj-clarion
 cd proj-clarion
 just install                  # Python deps
 (cd ui && npm install)        # UI deps
@@ -118,6 +137,9 @@ proj-clarion/
 
 - [docs/design.md](docs/design.md) — architecture and design decisions
 - [CHANGELOG.md](CHANGELOG.md) — per-release history
+- **In-app**:
+  - `/about` — runtime architecture, pipeline phases, data model, observability stack, demo walkthrough
+  - `/docs/ai-obs` — six-step copy-pasteable recipe for instrumenting any Python Claude SDK app the same way Clarion does it
 
 ## License
 

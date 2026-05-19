@@ -98,6 +98,85 @@ export const listProfiles = () => request<ProfileSummary[]>("/profiles");
 export const getProfile = (id: string) =>
   request<unknown>(`/profiles/${encodeURIComponent(id)}`);
 
+export interface ExtendProfileResult {
+  summary: string;
+  additions: Record<string, number>;
+  profile: unknown;
+}
+
+/** Apply an SE-driven, agent-produced extension to a profile.
+ *  One-shot (no streaming yet). Returns a summary + per-field counts
+ *  of what was added; the UI refetches getProfile to render the
+ *  extended state. */
+export const extendProfile = (id: string, prompt: string) =>
+  request<ExtendProfileResult>(
+    `/profiles/${encodeURIComponent(id)}/extend`,
+    { method: "POST", body: JSON.stringify({ prompt }) },
+  );
+
+export interface AcceptClaimResult {
+  /** Synthesized-flag count after the action. UI uses it to update
+   *  the Claims tab pill without an extra refetch. */
+  remaining: number;
+  /** Full extended profile. Caller can drop it into the cache or
+   *  ignore and rely on getProfile invalidation. */
+  profile: unknown;
+}
+
+/** Accept (or dismiss) a synthesized claim by field_path. The underlying
+ *  value stays in the profile; only the "review this" flag is removed.
+ *  Server records an audit row so the global Audit page shows the
+ *  decision. */
+export const acceptProfileClaim = (
+  id: string, field_path: string, decision: "accept" | "dismiss" = "accept",
+) =>
+  request<AcceptClaimResult>(
+    `/profiles/${encodeURIComponent(id)}/claims/accept`,
+    { method: "POST", body: JSON.stringify({ field_path, decision }) },
+  );
+
+// ─── Profile audit log ─────────────────────────────────────────────
+//
+// Mirrors the global plan-audit shape so AuditPage can render a third
+// "Profile changes" section using the same table chrome.
+
+export interface ProfileAuditEntry {
+  audit_id: number;
+  timestamp: string;
+  profile_id: string;
+  actor: string;
+  prompt: string;
+  summary: string;
+  additions: Record<string, number>;
+  applied: boolean;
+  url?: string | null;
+  company?: string | null;
+}
+
+export interface GlobalProfileAuditResponse {
+  entries: ProfileAuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** All extends for one profile, newest first. Used by the Profile
+ *  detail's extend-chat panel to render server-side history on mount. */
+export const getProfileAudit = (profile_id: string) =>
+  request<ProfileAuditEntry[]>(
+    `/profiles/${encodeURIComponent(profile_id)}/audit`,
+  );
+
+/** Global cross-profile feed for the /audit page's Profile changes
+ *  section. Pagination matches the other audit feeds. */
+export const listProfileAudit = (params?: { limit?: number; offset?: number }) => {
+  const q = new URLSearchParams();
+  if (params?.limit !== undefined)  q.set("limit",  String(params.limit));
+  if (params?.offset !== undefined) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  return request<GlobalProfileAuditResponse>(`/profiles/audit${qs ? "?" + qs : ""}`);
+};
+
 // ─── Plans ──────────────────────────────────────────────────────────
 
 export interface PlanSummary {
@@ -118,8 +197,25 @@ export interface PlanSummary {
   pipeline_id?: string | null;
   pipeline_status?: string | null;
 }
-export const listPlans = (state?: string) =>
-  request<PlanSummary[]>(`/plans${state ? `?state=${encodeURIComponent(state)}` : ""}`);
+/** List plans, optionally filtered by review state and/or source
+ *  profile. The Profile detail page passes `source_profile_id` to
+ *  show "plans built from this profile". String-arg back-compat is
+ *  kept so old call sites that passed a bare state name still work. */
+export function listPlans(state?: string): Promise<PlanSummary[]>;
+export function listPlans(params: {
+  state?: string;
+  source_profile_id?: string;
+}): Promise<PlanSummary[]>;
+export function listPlans(
+  arg?: string | { state?: string; source_profile_id?: string },
+): Promise<PlanSummary[]> {
+  const opts = typeof arg === "string" ? { state: arg } : (arg ?? {});
+  const q = new URLSearchParams();
+  if (opts.state) q.set("state", opts.state);
+  if (opts.source_profile_id) q.set("source_profile_id", opts.source_profile_id);
+  const qs = q.toString();
+  return request<PlanSummary[]>(`/plans${qs ? "?" + qs : ""}`);
+}
 export const getPlan = (id: string) =>
   request<unknown>(`/plans/${encodeURIComponent(id)}`);
 

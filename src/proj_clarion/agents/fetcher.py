@@ -132,59 +132,77 @@ async def fetch_one(
 
     started = time.monotonic()
     fetched_at = datetime.now(UTC)
-    try:
-        async with httpx.AsyncClient(
-            timeout=timeout_seconds,
-            follow_redirects=True,
-            headers={"User-Agent": _user_agent_for(url)},
-        ) as client:
-            resp = await client.get(url)
-        # Reject statuses → returned as error result, not raised. Lets
-        # research carry on with the URLs that did fetch cleanly.
-        if resp.status_code in _KNOWN_REJECT_STATUSES:
-            reason = _KNOWN_REJECT_STATUSES[resp.status_code]
-            _logger.warning(
-                "fetch.rejected",
-                url=url, status=resp.status_code, reason=reason,
-                final_url=str(resp.url),
-            )
+    # Wrap as a `web_fetch` tool span so the AI-Obs Tools view sees one
+    # row per URL. target_system carries the hostname so the page's
+    # provider-level breakdown shows which sites we hit. Errors are
+    # converted to FetchResult(error=...) rather than raised — the tool
+    # span records success=True for the call itself; per-result success
+    # is captured by the `output_summary` we set on the result holder.
+    from proj_clarion.observability.tools import track_tool_call
+    host = urlparse(url).hostname or ""
+    with track_tool_call(
+        agent_name="research_agent",
+        tool_name="web_fetch",
+        provider_name="http",
+        target_system=host,
+        action="GET",
+        input_summary=url,
+    ) as _tool:
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout_seconds,
+                follow_redirects=True,
+                headers={"User-Agent": _user_agent_for(url)},
+            ) as client:
+                resp = await client.get(url)
+            # Reject statuses → returned as error result, not raised.
+            if resp.status_code in _KNOWN_REJECT_STATUSES:
+                reason = _KNOWN_REJECT_STATUSES[resp.status_code]
+                _logger.warning(
+                    "fetch.rejected",
+                    url=url, status=resp.status_code, reason=reason,
+                    final_url=str(resp.url),
+                )
+                _tool["output"] = f"http_{resp.status_code}_{reason}"
+                return FetchResult(
+                    url=url,
+                    final_url=str(resp.url),
+                    status=resp.status_code,
+                    fetched_at=fetched_at,
+                    duration_seconds=time.monotonic() - started,
+                    title=None,
+                    text="",
+                    raw_html_truncated="",
+                    error=f"http_{resp.status_code}_{reason}",
+                )
+            text = trafilatura.extract(resp.text) or ""
+            title = trafilatura.extract_metadata(resp.text)
+            title_str = title.title if title else None
+            _tool["output"] = f"{resp.status_code} · {len(text)} chars"
             return FetchResult(
                 url=url,
                 final_url=str(resp.url),
                 status=resp.status_code,
                 fetched_at=fetched_at,
                 duration_seconds=time.monotonic() - started,
+                title=title_str,
+                text=text[:max_text_chars],
+                raw_html_truncated=resp.text[:5000],
+            )
+        except httpx.HTTPError as exc:
+            _logger.warning("fetch.http_error", url=url, error=str(exc)[:200])
+            _tool["output"] = f"error: {type(exc).__name__}"
+            return FetchResult(
+                url=url,
+                final_url=url,
+                status=0,
+                fetched_at=fetched_at,
+                duration_seconds=time.monotonic() - started,
                 title=None,
                 text="",
                 raw_html_truncated="",
-                error=f"http_{resp.status_code}_{reason}",
+                error=str(exc),
             )
-        text = trafilatura.extract(resp.text) or ""
-        title = trafilatura.extract_metadata(resp.text)
-        title_str = title.title if title else None
-        return FetchResult(
-            url=url,
-            final_url=str(resp.url),
-            status=resp.status_code,
-            fetched_at=fetched_at,
-            duration_seconds=time.monotonic() - started,
-            title=title_str,
-            text=text[:max_text_chars],
-            raw_html_truncated=resp.text[:5000],
-        )
-    except httpx.HTTPError as exc:
-        _logger.warning("fetch.http_error", url=url, error=str(exc)[:200])
-        return FetchResult(
-            url=url,
-            final_url=url,
-            status=0,
-            fetched_at=fetched_at,
-            duration_seconds=time.monotonic() - started,
-            title=None,
-            text="",
-            raw_html_truncated="",
-            error=str(exc),
-        )
 
 
 async def fetch_all(urls: list[str], *, extra_allow: list[str] | None = None) -> list[FetchResult]:

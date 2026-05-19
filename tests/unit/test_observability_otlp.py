@@ -60,7 +60,11 @@ class TestEndpointHelpers:
 class TestAssertsDefaults:
     def test_clarion_env_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLARION_ASSERTS_ENV", raising=False)
-        assert clarion_env() == "prod"
+        # Default flipped from "prod" to "dev" in v0.7.0 so asserts.env,
+        # deployment.environment, and every emitter's env tag stay
+        # unified under one scope on a fresh install. Promote with
+        # CLARION_ASSERTS_ENV=prod.
+        assert clarion_env() == "dev"
 
     def test_clarion_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLARION_ASSERTS_ENV", "staging")
@@ -87,9 +91,9 @@ class TestClarionResource:
         assert attrs["service.version"] == "0.5.0"
 
         # asserts.* + deployment.environment all share clarion_env()
-        assert attrs["asserts.env"] == "prod"
+        assert attrs["asserts.env"] == "dev"
         assert attrs["asserts.site"] == "demo"
-        assert attrs["deployment.environment"] == "prod"
+        assert attrs["deployment.environment"] == "dev"
 
         # plan_id / customer omitted when not provided — keeps cardinality
         # low for emitters that don't care
@@ -120,7 +124,13 @@ class TestClarionResource:
     def test_env_overrides_propagate_to_resource(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # CLARION_ASSERTS_ENV controls asserts.env; CLARION_ENVIRONMENT
+        # controls deployment.environment. They're separate variables on
+        # purpose so customer-isolated tenants can scope assertions per
+        # customer (CLARION_ASSERTS_ENV=acme) while keeping the deployment
+        # stage independent. Promotion path sets both.
         monkeypatch.setenv("CLARION_ASSERTS_ENV", "staging")
+        monkeypatch.setenv("CLARION_ENVIRONMENT", "staging")
         monkeypatch.setenv("CLARION_ASSERTS_SITE", "perf")
         r = clarion_resource(service_name="test")
         attrs = dict(r.attributes)

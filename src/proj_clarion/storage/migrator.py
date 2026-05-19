@@ -78,7 +78,18 @@ def drop_all(engine: Engine | None = None) -> None:
     # Drop in FK-safe order. CASCADE catches anything we miss but keeps
     # explicit dependencies obvious in this list.
     tables = [
+        # system_health has no FKs but lives at the top alongside the
+        # other observability tables so the family stays grouped.
+        "system_health",
+        # agent_tool_calls + agent_policy_violations both FK into
+        # pipelines and llm_calls, so they must be dropped before either.
+        # Listed first so the explicit dependency order is readable.
+        "agent_policy_violations",
+        "agent_tool_calls",
+        "llm_evals",
+        "llm_calls",
         "plan_audit_log",
+        "profile_audit_log",
         "business_events",
         "kg_edges",
         "kg_nodes",

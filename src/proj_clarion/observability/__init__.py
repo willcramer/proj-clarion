@@ -33,7 +33,15 @@ _sigil_client: object | None = None
 
 @lru_cache(maxsize=1)
 def init_telemetry() -> bool:
-    """Initialize OpenTelemetry tracing/metrics + Sigil. Returns True if OTLP wired."""
+    """Initialize OpenTelemetry tracing/metrics + Sigil. Returns True if OTLP wired.
+
+    Registers an atexit hook to flush + shutdown both the OTel
+    TracerProvider/MeterProvider and the Sigil client. Without this,
+    short-lived CLI subprocesses (research, plan, kg-publish) exit
+    before the BatchSpanProcessor's next export tick fires and any
+    queued Sigil tool-execution / generation records are dropped —
+    which is the most common cause of an empty AI-Obs Tools page.
+    """
     try:
         from opentelemetry import metrics, trace
         from opentelemetry.sdk.metrics import MeterProvider
@@ -107,6 +115,37 @@ def init_telemetry() -> bool:
     # --- Sigil ---
     _init_sigil()
 
+    # --- Exit flush ---
+    # CLI subprocesses (research, plan, kg-publish) finish in seconds-to-
+    # minutes. Without an atexit hook the BatchSpanProcessor's queued spans
+    # and the Sigil client's queued generations / tool executions die with
+    # the interpreter. Register here so every process that touched
+    # init_telemetry flushes before exit.
+    import atexit
+
+    def _flush_all() -> None:
+        # OTel: force-flush the tracer + meter providers we just set up.
+        try:
+            tracer_provider.force_flush(timeout_millis=5000)
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("otel.tracer.flush.skip", error=str(exc)[:200])
+        try:
+            tracer_provider.shutdown()
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("otel.tracer.shutdown.skip", error=str(exc)[:200])
+        try:
+            meter_provider.force_flush(timeout_millis=5000)
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("otel.meter.flush.skip", error=str(exc)[:200])
+        try:
+            meter_provider.shutdown()
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("otel.meter.shutdown.skip", error=str(exc)[:200])
+        # Sigil: flush queued records, then close.
+        shutdown_sigil()
+
+    atexit.register(_flush_all)
+
     return backend == "otlp"
 
 
@@ -160,10 +199,19 @@ def get_sigil_client() -> object | None:
 
 
 def shutdown_sigil() -> None:
-    """Flush + close the Sigil client. Safe at process exit."""
+    """Flush + close the Sigil client. Safe at process exit.
+
+    Flushes pending Generation + ToolExecution records first; the SDK's
+    `shutdown()` call also flushes but may swallow individual export
+    failures, so we call `flush()` explicitly to surface them in logs."""
     global _sigil_client
     if _sigil_client is None:
         return
+    try:
+        if hasattr(_sigil_client, "flush"):
+            _sigil_client.flush()  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("sigil.flush.failed", error=str(exc))
     try:
         _sigil_client.shutdown()  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001

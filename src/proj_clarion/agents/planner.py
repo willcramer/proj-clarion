@@ -31,7 +31,7 @@ from anthropic import Anthropic
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from proj_clarion.observability.sigil_helper import call_anthropic
+from proj_clarion.observability.llm_client import call_anthropic
 from proj_clarion.schemas import (
     AlertSpec,
     AssistantTool,
@@ -191,16 +191,28 @@ def _llm_json(
     failure point — `Expecting value: line 240 column 93 (char 35606)`
     is useless without seeing the surrounding 400 chars.
     """
+    # System prompt as a single cache_control'd content block. The
+    # planner makes 10-15 opus calls per build with the SAME analyze /
+    # model-processes / build-KG system text — wrapping it in
+    # cache_control={type:ephemeral} means the second-and-later calls
+    # within the 5-min cache window read at ~10% of full input cost.
+    # Anthropic silently no-ops the cache for blocks under their
+    # ~1024-token threshold; the planner's prompts are well above it.
     request: dict[str, Any] = {
         "model": _model(),
         "max_tokens": max_tokens,
-        "system": system,
+        "system": [{
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }],
         "messages": [{"role": "user", "content": user}],
     }
     response, gen_id = call_anthropic(
         _client(),
         request,
         agent_name=agent_name,
+        prompt_template=agent_name,
         parent_generation_ids=parent_generation_ids,
         conversation_id=conversation_id,
         tags={"clarion.component": "planner", "clarion.phase": agent_name.split(".")[-1]},
@@ -1493,6 +1505,13 @@ async def run_plan(
             root.set_attribute("plan.kg.edge_count", len(plan.knowledge_graph.edges))
             _logger.info("plan.run.ok", plan_id=str(plan.plan_id),
                          duration_s=time.monotonic() - state["started_at"])
+            # Structural evals — append-only rows in llm_evals + span
+            # events. Failure is non-fatal: the plan ships either way.
+            try:
+                from proj_clarion.observability.evals import run_plan_evals
+                run_plan_evals(plan, model=_model())
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("plan.evals.skip", error=str(exc)[:200])
         else:
             root.set_status(trace.Status(trace.StatusCode.ERROR, "plan assembly failed"))
             _logger.warning("plan.run.failed", errors=state.get("errors", []))

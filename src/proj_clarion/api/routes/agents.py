@@ -11,10 +11,11 @@ Both stream via SSE. v0.7 keeps these read-only — the agent's response
 is shown to the SE; persisting changes back to Postgres is explicit
 (separate endpoint, not yet wired) so we don't silently mutate plans.
 
-Sigil instrumentation isn't on these calls — the `sigil_helper.call_anthropic`
-wrapper doesn't yet support streaming. The instrumented CLI calls
-(plan run / research) still pass through it; the UI's interactive chat
-takes the streaming path directly. v0.8 follow-up.
+These streaming calls run through `llm_client.stream_anthropic`, which
+opens a `gen_ai.chat {model}` span carrying the Gen AI semantic-convention
+attributes plus a `gen_ai.ttft_ms` first-token timing. Sigil is skipped
+here — `sigil_helper` still only supports non-streaming, and the SE
+chat surface is exploratory rather than a pipeline artefact.
 """
 
 from __future__ import annotations
@@ -96,22 +97,31 @@ def _build_messages(history: list[dict[str, str]]) -> list[dict[str, Any]]:
     ]
 
 
-def _stream_response(system: str, messages: list[dict[str, Any]]) -> EventSourceResponse:
+def _stream_response(
+    system: str, messages: list[dict[str, Any]], *, prompt_template: str,
+) -> EventSourceResponse:
     """Token-by-token SSE stream from Anthropic.
 
     The Anthropic stream context manager yields TextDelta events when the
     model emits text, plus other events (tool calls etc.) we don't use
     yet. We forward only the text deltas to the UI.
     """
+    from proj_clarion.observability.llm_client import stream_anthropic
+
     client = _client()
+    request = {
+        "model": _model(),
+        "max_tokens": 2048,
+        "system": system,
+        "messages": messages,
+    }
 
     async def event_gen() -> object:
         try:
-            with client.messages.stream(
-                model=_model(),
-                max_tokens=2048,
-                system=system,
-                messages=messages,
+            with stream_anthropic(
+                client, request,
+                agent_name=f"clarion.agents.{prompt_template}",
+                prompt_template=prompt_template,
             ) as stream:
                 for text in stream.text_stream:
                     yield {"event": "delta", "data": text}
@@ -135,7 +145,9 @@ def research_extend(body: ChatBody) -> EventSourceResponse:
         + "\n\n=== Current CompanyProfile ===\n"
         + profile.model_dump_json(indent=2)
     )
-    return _stream_response(system, _build_messages(body.history))
+    return _stream_response(
+        system, _build_messages(body.history), prompt_template="research.extend",
+    )
 
 
 @router.post("/plan/refine")
@@ -154,4 +166,6 @@ def plan_refine(body: ChatBody) -> EventSourceResponse:
         + "\n\n=== Current DemoPlan ===\n"
         + plan.model_dump_json(indent=2)
     )
-    return _stream_response(system, _build_messages(body.history))
+    return _stream_response(
+        system, _build_messages(body.history), prompt_template="plan.refine",
+    )
