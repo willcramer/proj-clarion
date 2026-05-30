@@ -44,6 +44,13 @@ function Header() {
         Auto-detected guardrail trips (cost spikes, runaway output, prompt
         injection) attach as span events and write to a postgres audit
         table. External-dependency health is heartbeated every 60s.
+        The same wrapper instruments both the six-phase build pipeline and
+        the agentic Clarion Assistant: a chat turn is an{" "}
+        <code className="font-mono text-[13px]">assistant.conversation</code>{" "}
+        span, the LLM rounds nest as <code className="font-mono text-[13px]">gen_ai.chat</code>,
+        and every tool runs under an{" "}
+        <code className="font-mono text-[13px]">execute_tool</code> span — so a
+        chat session reads just like a build trace.
         This is exactly the pattern Proj Clarion uses — see{" "}
         <code className="font-mono text-[13px]">src/proj_clarion/observability/</code>{" "}
         ({" "}<code className="font-mono text-[12px]">llm_client.py</code>,{" "}

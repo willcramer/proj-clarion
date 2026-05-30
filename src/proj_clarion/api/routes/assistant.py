@@ -58,6 +58,7 @@ from typing import Any, Literal
 import structlog
 from anthropic import Anthropic
 from fastapi import APIRouter, HTTPException
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -74,6 +75,11 @@ from proj_clarion.storage import (
 )
 
 _logger = structlog.get_logger()
+# Traces the agentic loop the same way agents/planner.py traces build
+# phases: an `assistant.conversation` span groups each turn, the LLM calls
+# nest as `gen_ai.chat` spans (via stream_anthropic), and each tool runs
+# under an `execute_tool {name}` span.
+_tracer = trace.get_tracer("proj-clarion.assistant")
 
 router = APIRouter(prefix="/api/agents/clarion", tags=["clarion-assistant"])
 
@@ -540,19 +546,35 @@ def _stream_chat(
                             "mutating":    call["name"] in MUTATING_TOOL_NAMES,
                         }),
                     }
-                    if decline:
-                        result: Any = {
-                            "declined": True,
-                            "message": (
-                                f"The SE declined to run {call['name']}. It was NOT "
-                                "executed. Acknowledge and ask what they'd like to adjust "
-                                "— do not retry without a new instruction."
-                            ),
-                        }
-                        is_error = False
-                    else:
-                        with session_scope() as s:
-                            result, is_error = execute_tool(call["name"], call["input"], s)
+                    # Trace every tool the same way build phases trace their
+                    # work — one span per tool, with gen_ai.* + clarion.* attrs.
+                    with _tracer.start_as_current_span(f"execute_tool {call['name']}") as _tspan:
+                        _tspan.set_attribute("gen_ai.operation.name", "execute_tool")
+                        _tspan.set_attribute("gen_ai.tool.name", call["name"])
+                        _tspan.set_attribute("gen_ai.tool.call.id", call["tool_use_id"])
+                        _tspan.set_attribute(
+                            "clarion.assistant.tool.mutating",
+                            call["name"] in MUTATING_TOOL_NAMES,
+                        )
+                        if decline:
+                            _tspan.set_attribute("clarion.assistant.tool.declined", True)
+                            result: Any = {
+                                "declined": True,
+                                "message": (
+                                    f"The SE declined to run {call['name']}. It was NOT "
+                                    "executed. Acknowledge and ask what they'd like to adjust "
+                                    "— do not retry without a new instruction."
+                                ),
+                            }
+                            is_error = False
+                        else:
+                            with session_scope() as s:
+                                result, is_error = execute_tool(call["name"], call["input"], s)
+                            _tspan.set_attribute("clarion.assistant.tool.is_error", is_error)
+                            if is_error:
+                                _tspan.set_status(
+                                    trace.Status(trace.StatusCode.ERROR, "tool returned an error"),
+                                )
 
                     result_str = (
                         result if isinstance(result, str)
@@ -588,134 +610,143 @@ def _stream_chat(
                     )
                     AssistantConversationRepo().touch_last_message(s, conversation_id)
 
-            # ── Resume path: resolve the paused build approval first, then
-            # fall through to the loop so the model reacts to the result. ──
-            if resume_decision is not None:
-                with session_scope() as s:
-                    turns0 = AssistantTurnRepo().list_turns(s, conversation_id)
-                pending = _pending_tool_calls(turns0)
-                if pending:
-                    async for ev in resolve_tools(pending, decline=(resume_decision == "reject")):
-                        yield ev
-
-            for _iteration in range(AGENT_MAX_ITERATIONS):
-                # Rebuild messages from the current state of the conversation
-                # on each iteration — tool turns may have been just added.
-                with session_scope() as s:
-                    turns = AssistantTurnRepo().list_turns(s, conversation_id)
-                messages = _build_anthropic_messages(turns)
-
-                request: dict[str, Any] = {
-                    "model": model,
-                    "max_tokens": 4096,
-                    "system": _CLARION_SYSTEM,
-                    "messages": messages,
-                    "tools": TOOLS_ALL,
-                    "tool_choice": {"type": "auto"},
-                }
-
-                iter_text = ""
-                tool_calls: list[dict[str, Any]] = []
-                tokens_in = None
-                tokens_out = None
-
-                with stream_anthropic(
-                    client, request,
-                    agent_name="clarion.assistant",
-                    prompt_template="clarion.assistant",
-                ) as stream:
-                    for chunk in stream.text_stream:
-                        iter_text += chunk
-                        yield {"event": "delta", "data": chunk}
-                    try:
-                        final = stream.get_final_message()
-                        iter_text_final, tool_calls = _extract_assistant_blocks(final)
-                        # Prefer the assembled text from the final message —
-                        # it's the canonical value (handles edge cases where
-                        # text_stream might miss tail chunks).
-                        if iter_text_final:
-                            iter_text = iter_text_final
-                        usage = getattr(final, "usage", None)
-                        if usage is not None:
-                            tokens_in = getattr(usage, "input_tokens", None)
-                            tokens_out = getattr(usage, "output_tokens", None)
-                    except Exception as exc:  # noqa: BLE001
-                        _logger.warning(
-                            "clarion.assistant.final_unavailable",
-                            conversation_id=conversation_id, error=str(exc),
-                        )
-
-                # Persist assistant turn (text + any tool_calls).
-                with session_scope() as s:
-                    AssistantTurnRepo().append_turn(
-                        s, conversation_id,
-                        role="assistant",
-                        content=iter_text,
-                        tool_calls=tool_calls if tool_calls else None,
-                        tokens_in=tokens_in,
-                        tokens_out=tokens_out,
-                    )
-                    AssistantConversationRepo().touch_last_message(s, conversation_id)
-
-                final_iter_text = iter_text
-                final_tokens_in = tokens_in
-                final_tokens_out = tokens_out
-
-                # If no tool calls, we're done.
-                if not tool_calls:
-                    break
-
-                # ── Approval gate ── Pause before kicking off a build unless
-                # the SE has auto-approve on. The assistant turn (with the
-                # tool_use) is already persisted; we leave it unanswered and
-                # stop. The SE resolves it via the /resume endpoint, which
-                # runs or declines the pending tool and continues the loop.
-                if (not auto_approve) and any(
-                    c["name"] in NEEDS_APPROVAL_TOOL_NAMES for c in tool_calls
-                ):
-                    build_call = next(
-                        c for c in tool_calls if c["name"] in NEEDS_APPROVAL_TOOL_NAMES
-                    )
-                    yield {
-                        "event": "approval_required",
-                        "data": json.dumps({
-                            "conversation_id": conversation_id,
-                            "tool_use_id":     build_call["tool_use_id"],
-                            "name":            build_call["name"],
-                            "input":           build_call["input"],
-                            "message":         _approval_message(build_call),
-                        }),
-                    }
-                    paused = True
-                    break
-
-                async for ev in resolve_tools(tool_calls, decline=False):
-                    yield ev
-                # Loop: next iteration will rebuild messages and call Claude
-                # again with the tool_result in context.
-            else:
-                # for/else: we hit the iteration cap without breaking.
-                _logger.warning(
-                    "clarion.assistant.max_iterations_reached",
-                    conversation_id=conversation_id,
-                )
-
-            # Auto-generate title on first exchange if it's still null.
-            if existing_title is None and final_iter_text:
-                title = _autotitle(client, model, conversation_id)
-                if title:
+            with _tracer.start_as_current_span("assistant.conversation") as _conv_span:
+                _conv_span.set_attribute("gen_ai.operation.name", "chat")
+                _conv_span.set_attribute("gen_ai.agent.name", "clarion.assistant")
+                _conv_span.set_attribute("gen_ai.conversation.id", str(conversation_id))
+                _conv_span.set_attribute("clarion.assistant.conversation_id", conversation_id)
+                _conv_span.set_attribute("clarion.assistant.mode", "resume" if resume_decision else "chat")
+                _conv_span.set_attribute("clarion.assistant.auto_approve", auto_approve)
+                if resume_decision:
+                    _conv_span.set_attribute("clarion.assistant.resume_decision", resume_decision)
+                # ── Resume path: resolve the paused build approval first, then
+                # fall through to the loop so the model reacts to the result. ──
+                if resume_decision is not None:
                     with session_scope() as s:
-                        AssistantConversationRepo().update_title(s, conversation_id, title)
+                        turns0 = AssistantTurnRepo().list_turns(s, conversation_id)
+                    pending = _pending_tool_calls(turns0)
+                    if pending:
+                        async for ev in resolve_tools(pending, decline=(resume_decision == "reject")):
+                            yield ev
 
-            yield {
-                "event": "done",
-                "data": json.dumps({
-                    "conversation_id":   conversation_id,
-                    "tokens_in":         final_tokens_in,
-                    "tokens_out":        final_tokens_out,
-                    "awaiting_approval": paused,
-                }),
-            }
+                for _iteration in range(AGENT_MAX_ITERATIONS):
+                    # Rebuild messages from the current state of the conversation
+                    # on each iteration — tool turns may have been just added.
+                    with session_scope() as s:
+                        turns = AssistantTurnRepo().list_turns(s, conversation_id)
+                    messages = _build_anthropic_messages(turns)
+
+                    request: dict[str, Any] = {
+                        "model": model,
+                        "max_tokens": 4096,
+                        "system": _CLARION_SYSTEM,
+                        "messages": messages,
+                        "tools": TOOLS_ALL,
+                        "tool_choice": {"type": "auto"},
+                    }
+
+                    iter_text = ""
+                    tool_calls: list[dict[str, Any]] = []
+                    tokens_in = None
+                    tokens_out = None
+
+                    with stream_anthropic(
+                        client, request,
+                        agent_name="clarion.assistant",
+                        prompt_template="clarion.assistant",
+                    ) as stream:
+                        for chunk in stream.text_stream:
+                            iter_text += chunk
+                            yield {"event": "delta", "data": chunk}
+                        try:
+                            final = stream.get_final_message()
+                            iter_text_final, tool_calls = _extract_assistant_blocks(final)
+                            # Prefer the assembled text from the final message —
+                            # it's the canonical value (handles edge cases where
+                            # text_stream might miss tail chunks).
+                            if iter_text_final:
+                                iter_text = iter_text_final
+                            usage = getattr(final, "usage", None)
+                            if usage is not None:
+                                tokens_in = getattr(usage, "input_tokens", None)
+                                tokens_out = getattr(usage, "output_tokens", None)
+                        except Exception as exc:  # noqa: BLE001
+                            _logger.warning(
+                                "clarion.assistant.final_unavailable",
+                                conversation_id=conversation_id, error=str(exc),
+                            )
+
+                    # Persist assistant turn (text + any tool_calls).
+                    with session_scope() as s:
+                        AssistantTurnRepo().append_turn(
+                            s, conversation_id,
+                            role="assistant",
+                            content=iter_text,
+                            tool_calls=tool_calls if tool_calls else None,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                        )
+                        AssistantConversationRepo().touch_last_message(s, conversation_id)
+
+                    final_iter_text = iter_text
+                    final_tokens_in = tokens_in
+                    final_tokens_out = tokens_out
+
+                    # If no tool calls, we're done.
+                    if not tool_calls:
+                        break
+
+                    # ── Approval gate ── Pause before kicking off a build unless
+                    # the SE has auto-approve on. The assistant turn (with the
+                    # tool_use) is already persisted; we leave it unanswered and
+                    # stop. The SE resolves it via the /resume endpoint, which
+                    # runs or declines the pending tool and continues the loop.
+                    if (not auto_approve) and any(
+                        c["name"] in NEEDS_APPROVAL_TOOL_NAMES for c in tool_calls
+                    ):
+                        build_call = next(
+                            c for c in tool_calls if c["name"] in NEEDS_APPROVAL_TOOL_NAMES
+                        )
+                        yield {
+                            "event": "approval_required",
+                            "data": json.dumps({
+                                "conversation_id": conversation_id,
+                                "tool_use_id":     build_call["tool_use_id"],
+                                "name":            build_call["name"],
+                                "input":           build_call["input"],
+                                "message":         _approval_message(build_call),
+                            }),
+                        }
+                        paused = True
+                        break
+
+                    async for ev in resolve_tools(tool_calls, decline=False):
+                        yield ev
+                    # Loop: next iteration will rebuild messages and call Claude
+                    # again with the tool_result in context.
+                else:
+                    # for/else: we hit the iteration cap without breaking.
+                    _logger.warning(
+                        "clarion.assistant.max_iterations_reached",
+                        conversation_id=conversation_id,
+                    )
+
+                # Auto-generate title on first exchange if it's still null.
+                if existing_title is None and final_iter_text:
+                    title = _autotitle(client, model, conversation_id)
+                    if title:
+                        with session_scope() as s:
+                            AssistantConversationRepo().update_title(s, conversation_id, title)
+
+                yield {
+                    "event": "done",
+                    "data": json.dumps({
+                        "conversation_id":   conversation_id,
+                        "tokens_in":         final_tokens_in,
+                        "tokens_out":        final_tokens_out,
+                        "awaiting_approval": paused,
+                    }),
+                }
         except Exception as exc:  # noqa: BLE001
             _logger.exception(
                 "clarion.assistant.failed",

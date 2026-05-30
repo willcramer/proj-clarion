@@ -44,6 +44,7 @@ Five logical components with thin contracts between them.
 3. **Ephemeral cloud landscape.** Per-demo Kubernetes cluster (EKS first) with workloads that mirror the prospect's stack at signal-shape level. Tagged for TTL teardown.
 4. **Data plane.** Two sinks. BigQuery for business entities and events (Grafana datasource). Grafana Cloud LGTMP (Loki, Grafana, Tempo, Mimir, Pyroscope) plus AI Observability for telemetry.
 5. **Demo surface.** Generated dashboards (business view, technical view, pivot view), alert rules, knowledge graph panel, Assistant tool definitions.
+6. **Clarion Assistant.** A single, app-wide agentic chat (it replaced the per-page Refine/Extend panels). It runs the same Anthropic SDK + tool loop as the pipeline — start/re-run a build, extend a profile, approve a plan, start/stop a demo, cancel a running build — with an approval gate before any build kicks off (toggleable to hands-free). It is instrumented exactly like the build phases: an `assistant.conversation` span groups each turn, the LLM rounds nest as `gen_ai.chat` spans (`agent_name=clarion.assistant`), and every tool runs under an `execute_tool {name}` span, with the same per-call cost rows landing in `llm_calls`. So a chat session reads like a build trace in Tempo / AI Observability.
 
 ## 5. The four schemas (structural depth)
 

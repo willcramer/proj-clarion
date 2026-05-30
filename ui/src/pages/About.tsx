@@ -204,6 +204,11 @@ function ArchitectureSVG() {
       {/* Emitter */}
       <Block x={620} y={140} w={170} h={56} label="Entity emitter" sub="OTel metrics · logs · traces" tone="live" />
 
+      {/* Clarion Assistant — the global agentic chat front-door. Same
+          Anthropic SDK + tool loop as the pipeline; emits its own
+          conversation / turn / tool spans to Grafana Cloud. */}
+      <Block x={180} y={150} w={170} h={56} label="Clarion Assistant" sub="agentic chat · tools · approval" tone="accent" />
+
       {/* Grafana Cloud row */}
       <Block x={20}  y={260} w={150} h={56} label="Grafana Cloud" sub="Mimir · Loki · Tempo" tone="grafana" />
       <Block x={200} y={260} w={150} h={56} label="Grafana Asserts" sub="Knowledge graph" tone="grafana" />
@@ -230,6 +235,13 @@ function ArchitectureSVG() {
       <Arrow from={[705, 68]} to={[845, 260]} accent />
       <Arrow from={[95, 316]} to={[490, 380]} accent />
       <Arrow from={[635, 316]} to={[580, 380]} accent />
+
+      {/* Clarion Assistant wiring: UI opens it, it calls Claude + tools,
+          persists to Postgres, and ships conversation/tool spans to Tempo. */}
+      <Arrow from={[260, 86]}  to={[260, 150]} accent />
+      <Arrow from={[350, 162]} to={[620, 46]}  accent />
+      <Arrow from={[350, 178]} to={[380, 178]} />
+      <Arrow from={[200, 206]} to={[95, 260]}  accent />
 
       {/* Section labels — light grey, just visual orientation */}
       <text x={20}  y={20} fontSize="10" fill="var(--color-text-faint)" fontFamily="var(--font-mono)" letterSpacing="0.08em">
@@ -477,6 +489,13 @@ const OBS_LAYERS: {
     emits:   "gen_ai.tool.name + gen_ai.agent.name + gen_ai.provider.name on every external call (web_fetch, edgar_fetch, github_org_fetch, greenhouse_fetch, lever_fetch, wikidata_fetch, dashboard_provision, alert_provision, kg_model_rules_push, kg_prom_rules_push, kg_entity_emitter_start)",
     exporter: "OTLP/HTTP to Grafana Cloud + agent_tool_calls row in Postgres",
     lands_in: "Tempo + AI Obs Tools view + agent_tool_calls table",
+    status:  "wired",
+  },
+  {
+    layer:   "Clarion Assistant spans",
+    emits:   "assistant.conversation span groups each chat turn; the LLM rounds nest as gen_ai.chat spans (agent_name=clarion.assistant); every tool runs under an execute_tool {name} span carrying gen_ai.tool.name + gen_ai.tool.call.id + clarion.assistant.tool.mutating / .is_error / .declined. Same per-call cost rows in llm_calls as the build phases, so a chat session reads exactly like a build trace.",
+    exporter: "OTLP/HTTP to Grafana Cloud + llm_calls row in Postgres",
+    lands_in: "Tempo + AI Obs + llm_calls table",
     status:  "wired",
   },
   {

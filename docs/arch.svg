@@ -63,6 +63,11 @@
   <text x="705" y="162" text-anchor="middle" class="lbl" fill="#6EE7B7">Entity emitter</text>
   <text x="705" y="180" text-anchor="middle" class="sub">OTel metrics · logs · traces</text>
 
+  <!-- Clarion Assistant (accent / teal) — global agentic chat front-door -->
+  <rect x="180" y="150" width="170" height="56" rx="10" fill="rgba(34,211,238,0.18)" stroke="rgba(34,211,238,0.42)"/>
+  <text x="265" y="172" text-anchor="middle" class="lbl" fill="#22D3EE">Clarion Assistant</text>
+  <text x="265" y="190" text-anchor="middle" class="sub">agentic chat · tools · approval</text>
+
   <!-- ===== Row 3: Grafana Cloud row (grafana orange family) ===== -->
   <text x="20" y="250" class="section">GRAFANA CLOUD</text>
 
@@ -116,4 +121,10 @@
   <!-- Cloud surfaces → Live demo (accent) -->
   <line x1="95"  y1="316" x2="490" y2="380" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
   <line x1="635" y1="316" x2="580" y2="380" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <!-- Clarion Assistant: UI opens it; it calls Claude + tools, persists to
+       Postgres, and ships conversation/tool spans to Tempo (accent). -->
+  <line x1="260" y1="86"  x2="260" y2="150" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <line x1="350" y1="162" x2="620" y2="46"  stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
+  <line x1="350" y1="178" x2="380" y2="178" stroke="#6B7385" stroke-width="1" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrow)"/>
+  <line x1="200" y1="206" x2="95"  y2="260" stroke="#22D3EE" stroke-width="1.5" opacity="0.8" marker-end="url(#arrow-accent)"/>
 </svg>
