@@ -564,9 +564,23 @@ def stream_anthropic(
                             cache_read_tokens=cache_r, cache_write_tokens=cache_w,
                             stop_reason=stop,
                         )
+                        # Record a Sigil Generation when a conversation is in
+                        # play (the assistant). This is what populates Grafana
+                        # AI-Obs → Conversations; the build pipeline does the
+                        # same via call_anthropic. Gated on conversation_id so
+                        # the legacy streaming routes stay Sigil-free.
+                        sigil_gen_id: str | None = None
+                        if conversation_id:
+                            sigil_gen_id = _report_to_sigil(
+                                response=final, request=request,
+                                agent_name=agent_name, parent_generation_ids=None,
+                                conversation_id=conversation_id, tags=None,
+                            ) or None
+                            if sigil_gen_id:
+                                span.set_attribute("sigil.generation.id", sigil_gen_id)
                         _persist_call(
                             call_id=call_id, model=model, agent_name=agent_name,
-                            sigil_generation_id=None,
+                            sigil_generation_id=sigil_gen_id,
                             input_tokens=inp, output_tokens=out,
                             cache_read_tokens=cache_r, cache_write_tokens=cache_w,
                             stop_reason=stop, cost_usd=cost, cache_savings_usd=savings,
