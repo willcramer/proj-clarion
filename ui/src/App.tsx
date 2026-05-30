@@ -17,6 +17,7 @@ import { PipelineRedirect } from "@/pages/PipelineRedirect";
 import { SettingsRoute } from "@/pages/SettingsRoute";
 import { PipelineProvider } from "@/lib/PipelineContext";
 import { ThemeProvider } from "@/lib/ThemeContext";
+import { AssistantProvider } from "@/lib/AssistantContext";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -46,6 +47,14 @@ export default function App() {
              */}
             <SetupGate>
               <PipelineProvider>
+                {/*
+                 * AssistantProvider sits inside the router (so the drawer
+                 * can derive scope from the current route via useLocation)
+                 * and inside PipelineProvider (so assistant-triggered builds
+                 * can latch into the followed-pipeline context). Any page can
+                 * call useAssistant().openAssistant({ scope, seedPrompt }).
+                 */}
+                <AssistantProvider>
                 <Routes>
                   <Route element={<Layout />}>
                     <Route index element={<DashboardPage />} />
@@ -72,6 +81,7 @@ export default function App() {
                     <Route path="/setup" element={<SettingsRoute />} />
                   </Route>
                 </Routes>
+                </AssistantProvider>
               </PipelineProvider>
             </SetupGate>
           </ToastProvider>

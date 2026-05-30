@@ -1,19 +1,38 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { Activity, Square, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Square, AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
 
 import { listRuns, streamRun, cancelRun, type RunSummary } from "@/lib/api";
 import { Card } from "@/components/Card";
 import { Badge } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { LogView } from "@/components/LogView";
+import { Pagination } from "@/components/Pagination";
+import { RunKpiCard } from "@/components/RunKpiCard";
 import { cn } from "@/lib/cn";
 
 export function RunsPage() {
   const runs = useQuery({ queryKey: ["runs"], queryFn: listRuns, refetchInterval: 3_000 });
   const [params, setParams] = useSearchParams();
   const selected = params.get("run");
+
+  // Sort newest-first so the highlights surface the freshest runs.
+  const ordered = useMemo(
+    () => [...(runs.data ?? [])].sort(
+      (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
+    ),
+    [runs.data],
+  );
+
+  const HIGHLIGHTS_LIMIT = 6;
+  const highlights = ordered.slice(0, HIGHLIGHTS_LIMIT);
+  const showTable = ordered.length > HIGHLIGHTS_LIMIT;
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(ordered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = ordered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   return (
     <div className="space-y-6">
@@ -24,77 +43,135 @@ export function RunsPage() {
           one of <code className="font-mono">generate</code>, <code className="font-mono">provision</code>,
           {" "}<code className="font-mono">kg-publish</code>, or <code className="font-mono">live-tail</code>.
           Each one shells out to <code className="font-mono">proj-clarion</code> just like
-          you'd run from a terminal, same arguments, same logs. This page is where you
-          watch what's happening, cancel a long-running one, or check the exit status.
-        </p>
-        <p className="text-[var(--color-text-faint)] text-xs mt-2 max-w-3xl">
-          Compare to <strong>pipelines</strong> (the Build page): a pipeline chains
-          multiple phases together (research → plan → generate → provision → kg-publish)
-          and is tracked as one entity. Runs are the lower-level primitive.
-          When you click "Generate events" on a Plan detail page, that creates a run.
-          The Build page creates a pipeline that internally creates several runs.
+          you'd run from a terminal, same arguments, same logs.{" "}
+          <span className="text-[var(--color-text-faint)] tabular-nums">
+            {ordered.length} total
+          </span>
         </p>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-6">
-        <RunsList
-          runs={runs.data ?? []}
-          selected={selected}
-          onSelect={(id) => setParams(id ? { run: id } : {})}
-        />
-        {selected ? (
+
+      {ordered.length === 0 ? (
+        <Card>
+          <div className="p-12 text-center text-[var(--color-text-muted)] text-sm">
+            No runs in this session. Start one from a plan's actions panel, or via ⌘K → "generate".
+          </div>
+        </Card>
+      ) : (
+        <>
+          {/* Highlights — top 6 newest runs as compact KPI cards. */}
+          <section aria-label="Recent runs">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                Recent
+              </h2>
+              <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                {highlights.length} of {ordered.length}
+              </span>
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {highlights.map((r) => (
+                <RunKpiCard
+                  key={r.run_id}
+                  run={r}
+                  compact
+                  selected={selected === r.run_id}
+                  onClick={() => setParams(r.run_id === selected ? {} : { run: r.run_id })}
+                />
+              ))}
+            </div>
+          </section>
+
+          {/* Paginated table */}
+          {showTable && (
+            <section aria-label="All runs">
+              <div className="flex items-baseline justify-between mb-3">
+                <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                  All runs
+                </h2>
+                <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                  {ordered.length} total
+                </span>
+              </div>
+              <Card className="p-0 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider border-b border-[var(--color-border)]">
+                    <tr>
+                      <th className="text-left font-medium px-4 py-3">Kind</th>
+                      <th className="text-left font-medium px-4 py-3">Plan</th>
+                      <th className="text-left font-medium px-4 py-3">Status</th>
+                      <th className="text-right font-medium px-4 py-3">Lines</th>
+                      <th className="text-right font-medium px-4 py-3">Started</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((r) => (
+                      <tr
+                        key={r.run_id}
+                        onClick={() => setParams(r.run_id === selected ? {} : { run: r.run_id })}
+                        className={cn(
+                          "border-b border-[var(--color-border)] last:border-0 cursor-pointer transition-colors",
+                          selected === r.run_id
+                            ? "bg-[var(--color-accent-bg)]/40"
+                            : "hover:bg-white/[0.02]",
+                        )}
+                      >
+                        <td className="px-4 py-3 font-medium">{r.kind}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">
+                          {r.plan_id.slice(0, 8)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <RunStatus run={r} />
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums text-xs">
+                          {r.line_count.toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3 text-right text-xs text-[var(--color-text-muted)]">
+                          {new Date(r.started_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <Pagination
+                  page={safePage}
+                  pageSize={pageSize}
+                  total={ordered.length}
+                  onPageChange={setPage}
+                  onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+                />
+              </Card>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Streaming log viewer — appears below the list/table when a
+          run is selected. Same pattern as Pipelines: list above,
+          inspection below. */}
+      {selected && (
+        <section aria-label="Run inspection">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+              Streaming log
+              <span className="ml-2 font-mono text-[10px] tracking-normal normal-case text-[var(--color-text-faint)]">
+                {selected.slice(0, 8)}
+              </span>
+            </h2>
+            <button
+              type="button"
+              onClick={() => setParams({})}
+              className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1"
+            >
+              <X size={12} /> Close
+            </button>
+          </div>
           <RunDetail
             runId={selected}
-            run={(runs.data ?? []).find((r) => r.run_id === selected)}
+            run={ordered.find((r) => r.run_id === selected)}
           />
-        ) : (
-          <Card className="p-12 text-center text-[var(--color-text-faint)] flex items-center justify-center">
-            <div>
-              <Activity className="mx-auto opacity-40 mb-3" size={28} />
-              <div className="text-sm">Select a run to view its log.</div>
-              <div className="text-xs mt-1 max-w-sm mx-auto">
-                Start a new run from a plan's actions panel, or via ⌘K → "generate".
-              </div>
-            </div>
-          </Card>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RunsList({
-  runs, selected, onSelect,
-}: {
-  runs: RunSummary[]; selected: string | null; onSelect: (id: string | null) => void;
-}) {
-  return (
-    <Card className="overflow-hidden">
-      {runs.length === 0 ? (
-        <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">No runs in this session.</div>
-      ) : (
-        <ul className="divide-y divide-[var(--color-border)]">
-          {runs.map((r) => (
-            <li
-              key={r.run_id}
-              onClick={() => onSelect(r.run_id)}
-              className={cn(
-                "px-4 py-3 cursor-pointer transition-colors",
-                selected === r.run_id ? "bg-white/[0.05]" : "hover:bg-white/[0.02]",
-              )}
-            >
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="font-medium text-sm">{r.kind}</span>
-                <RunStatus run={r} />
-              </div>
-              <div className="text-xs text-[var(--color-text-muted)] font-mono">{r.plan_id.slice(0, 8)}</div>
-              <div className="text-xs text-[var(--color-text-faint)] mt-0.5">
-                {new Date(r.started_at).toLocaleString()} · {r.line_count} lines
-              </div>
-            </li>
-          ))}
-        </ul>
+        </section>
       )}
-    </Card>
+    </div>
   );
 }
 

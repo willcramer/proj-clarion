@@ -180,6 +180,79 @@ def _trace_search_panel(
     }
 
 
+def _gauge_panel(
+    panel_id: int, title: str, targets: list[dict[str, Any]], pos: dict[str, int],
+    *, datasource_kind: str, unit: str | None = None,
+    thresholds: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Gauge for ratio / OEE-style KPIs. Defaults to 0-1 with red/yellow/green
+    band tuned for OEE world-class >85% benchmark."""
+    field = {
+        "defaults": {
+            "min": 0, "max": 1,
+            "thresholds": {
+                "mode": "absolute",
+                "steps": thresholds or [
+                    {"value": None, "color": "red"},
+                    {"value": 0.65,  "color": "orange"},
+                    {"value": 0.85,  "color": "green"},
+                ],
+            },
+        },
+        "overrides": [],
+    }
+    if unit:
+        field["defaults"]["unit"] = unit
+    return {
+        "id": panel_id,
+        "title": title,
+        "type": "gauge",
+        "datasource": _ds_ref(datasource_kind),
+        "gridPos": pos,
+        "targets": targets,
+        "fieldConfig": field,
+        "options": {"reduceOptions": {"calcs": ["lastNotNull"]},
+                    "showThresholdLabels": False, "showThresholdMarkers": True},
+    }
+
+
+def _geomap_panel(
+    panel_id: int, title: str, targets: list[dict[str, Any]], pos: dict[str, int],
+) -> dict[str, Any]:
+    """Geomap panel for plant/facility footprints. Expects a Prom instant
+    query that returns one series per facility with `clarion_latitude` and
+    `clarion_longitude` labels — Grafana's geomap auto-parses the label
+    field names when the layer is set to `markers` with auto coords."""
+    return {
+        "id": panel_id,
+        "title": title,
+        "type": "geomap",
+        "datasource": _ds_ref("prometheus"),
+        "gridPos": pos,
+        "targets": targets,
+        "fieldConfig": {"defaults": {"custom": {"hideFrom": {"viz": False, "legend": False}}},
+                        "overrides": []},
+        "options": {
+            "view": {"id": "zero", "lat": 20, "lon": 30, "zoom": 1.6},
+            "controls": {"showZoom": True, "showAttribution": True},
+            "basemap": {"type": "default"},
+            "layers": [{
+                "type": "markers",
+                "name": "Facilities",
+                "config": {
+                    "showLegend": True,
+                    "style": {"size": {"fixed": 8}, "color": {"fixed": "blue"}},
+                },
+                "location": {
+                    "mode": "coords",
+                    "latitude": "clarion_latitude",
+                    "longitude": "clarion_longitude",
+                },
+            }],
+        },
+    }
+
+
 # ============================================================
 # Postgres SQL templates against business_events
 # ============================================================
@@ -281,6 +354,126 @@ def _panel_for_title(
     points at a real datasource and renders something plausible".
     """
     lower = title.lower()
+
+    # ---- Manufacturing / industrial-ops panels (b2b_industrial archetype) ----
+    # These take precedence over the generic postgres fallbacks so plant
+    # KPIs land on real Prometheus series (OEE feeders, RED metrics)
+    # instead of postgres event-volume placeholders. Each branch points at
+    # a metric the kg_publish emitter actually emits — see
+    # `red_emitter._emit_plant_*` and `_emit_kube_node_info`.
+
+    # OEE itself — multiply the three feeder ratios from RedEmitter.
+    if "oee" in lower or "overall equipment effectiveness" in lower:
+        promql = (
+            'avg by (plant) ('
+            '  clarion_plant_availability_ratio'
+            '* clarion_plant_performance_ratio'
+            '* clarion_plant_quality_ratio'
+            ')'
+        )
+        # Use gauge for a single-plant view, timeseries when "by plant"
+        # / "over time" / "trend" appears.
+        if any(w in lower for w in ("over time", "trend", "history", "by plant")):
+            return _timeseries_panel(
+                panel_id, title, [_prom_target(promql)], pos,
+                datasource_kind="prometheus", unit="percentunit",
+            )
+        return _gauge_panel(
+            panel_id, title, [_prom_target(f'avg({promql})')], pos,
+            datasource_kind="prometheus", unit="percentunit",
+        )
+
+    # OEE component feeders surfaced individually.
+    if "availability" in lower and ("plant" in lower or "ratio" in lower):
+        return _timeseries_panel(
+            panel_id, title,
+            [_prom_target('avg by (plant) (clarion_plant_availability_ratio)')],
+            pos, datasource_kind="prometheus", unit="percentunit",
+        )
+    if any(w in lower for w in ("first-pass yield", "first pass yield",
+                                  "defect rate", "quality ratio")):
+        # First-pass yield ≈ Quality ratio. Defect rate = 1 - quality.
+        if "defect" in lower:
+            return _timeseries_panel(
+                panel_id, title,
+                [_prom_target('avg by (plant) (1 - clarion_plant_quality_ratio)')],
+                pos, datasource_kind="prometheus", unit="percentunit",
+            )
+        return _timeseries_panel(
+            panel_id, title,
+            [_prom_target('avg by (plant) (clarion_plant_quality_ratio)')],
+            pos, datasource_kind="prometheus", unit="percentunit",
+        )
+    if "performance ratio" in lower or "cycle rate" in lower:
+        return _timeseries_panel(
+            panel_id, title,
+            [_prom_target('avg by (plant) (clarion_plant_performance_ratio)')],
+            pos, datasource_kind="prometheus", unit="percentunit",
+        )
+
+    # Plant utilization / units produced — derive from OEE × baseline.
+    if "plant utilization" in lower or "utilization" in lower:
+        return _gauge_panel(
+            panel_id, title,
+            [_prom_target(
+                'avg('
+                '  clarion_plant_availability_ratio'
+                '* clarion_plant_performance_ratio'
+                ')'
+            )],
+            pos, datasource_kind="prometheus", unit="percentunit",
+        )
+    if "units produced" in lower or "throughput" in lower or "tons" in lower:
+        # Synthetic units = sum(rate(http_requests_total)) for manufacturing
+        # services as a proxy until a dedicated units-produced counter lands.
+        return _timeseries_panel(
+            panel_id, title,
+            [_prom_target(
+                'sum by (plant_id) (rate(http_requests_total{namespace="manufacturing"}[$__rate_interval]))'
+            )],
+            pos, datasource_kind="prometheus", unit="short",
+        )
+
+    # OTIF (on-time-in-full) — proxy via RED metrics on order-mgmt services
+    # until a dedicated OTIF gauge ships. Customers read the panel as
+    # "request success on the order pipeline = orders shipped on time".
+    if "otif" in lower or "on-time delivery" in lower or "on time delivery" in lower:
+        promql = (
+            'sum(rate(http_requests_total{service=~".*om.*|.*order.*",status_class="2xx"}[$__rate_interval]))'
+            ' / sum(rate(http_requests_total{service=~".*om.*|.*order.*"}[$__rate_interval]))'
+        )
+        return _timeseries_panel(
+            panel_id, title, [_prom_target(promql)], pos,
+            datasource_kind="prometheus", unit="percentunit",
+        )
+
+    # Queue depth — Prom metric naming varies; use a sensible default that
+    # the SE can refine. RED's request_duration backlog is a fair proxy.
+    if "queue depth" in lower or "backlog" in lower or "lag" in lower:
+        return _timeseries_panel(
+            panel_id, title,
+            [_prom_target(
+                'sum by (service) (rate(http_request_duration_seconds_sum_total[$__rate_interval]))'
+                ' / clamp_min(sum by (service) (rate(http_request_duration_seconds_count_total[$__rate_interval])), 1)'
+            )],
+            pos, datasource_kind="prometheus", unit="s",
+        )
+
+    # Plant / facility map — only fires when the title explicitly asks for
+    # geography. The geomap pulls lat/lon labels from clarion_entity_info.
+    if any(w in lower for w in ("map", "geomap", "footprint", "locations",
+                                  "global plant", "world map")):
+        return _geomap_panel(
+            panel_id, title,
+            [_prom_target(
+                'last_over_time('
+                'clarion_entity_info{clarion_entity_kind="business_unit",'
+                'clarion_latitude!=""}[5m])'
+            )],
+            pos,
+        )
+
+    # ---- generic technical / business panels (existing heuristics) ----
 
     # Trace-shaped panels (technical / pivot)
     if any(w in lower for w in ("trace", "span", "explorer", "exemplar")):

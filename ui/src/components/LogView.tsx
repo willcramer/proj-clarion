@@ -87,6 +87,8 @@ const SEVERITY_TEXT: Record<Exclude<Severity, null>, string> = {
 // structured logs vs. the certain wins of cleaning up structlog output.
 function stripAnsi(line: string): string {
   return line
+    // ESC (\x1b) is the intended ANSI-escape sentinel we're stripping.
+    // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-9;]*m/g, "")  // proper ANSI
     .replace(/\[[0-9;]*m/g, "");     // half-stripped CSI residue
 }

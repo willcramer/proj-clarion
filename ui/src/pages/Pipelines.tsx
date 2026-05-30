@@ -20,14 +20,15 @@ import {
 import { CrumbChip } from "@/components/CrumbChip";
 import {
   listPipelines, listPlans, listProfiles, cancelPipeline,
-  type PipelineSummary, type PlanSummary, type ProfileSummary,
+  type PipelineSummary, type ProfileSummary,
   type PipelinePhase, PIPELINE_PHASES,
 } from "@/lib/api";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
-import { KpiCard } from "@/components/KpiCard";
 import { LogView } from "@/components/LogView";
+import { Pagination } from "@/components/Pagination";
+import { PipelineKpiCard } from "@/components/PipelineKpiCard";
 import { cn } from "@/lib/cn";
 import { formatDuration } from "@/lib/diagnose";
 import { usePipeline } from "@/lib/PipelineContext";
@@ -41,127 +42,69 @@ export function PipelinesPage() {
   const [params, setParams] = useSearchParams();
   const selected = params.get("p");
 
-  // Aggregate KPIs across the visible pipelines. Cheap, these lists
-  // are bounded to a few hundred at most before the API restart wipes
-  // them. Recomputing on every render is fine.
   const pipelines = list.data ?? [];
-  const kpis = useMemo(() => {
-    const running = pipelines.filter((p) => p.status === "running").length;
-    const failed = pipelines.filter((p) => p.status === "failed").length;
-    const done = pipelines.filter((p) => p.status === "done").length;
-    const cancelled = pipelines.filter((p) => p.status === "cancelled").length;
-    // Median duration of finished builds, a more stable number than mean
-    // for build pipelines where one stuck build can drag the average up.
-    const durations = pipelines
-      .map((p) => durationMs(p))
-      .filter((d): d is number => d !== null && !!d)
-      .sort((a, b) => a - b);
-    const medianDuration =
-      durations.length === 0
-        ? null
-        : durations[Math.floor(durations.length / 2)];
-    return { running, failed, done, cancelled, medianDuration, total: pipelines.length };
-  }, [pipelines]);
-
-  // Drilldown, caller picks one of running/failed/done; the list
-  // below filters to that subset. `null` = no filter.
-  const [statusFilter, setStatusFilter] = useState<null | "running" | "failed" | "done">(null);
-  const filteredPipelines = useMemo(
-    () =>
-      statusFilter
-        ? pipelines.filter((p) => p.status === statusFilter)
-        : pipelines,
-    [pipelines, statusFilter],
-  );
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Pipelines</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Builds</h1>
         <p className="text-[var(--color-text-muted)] mt-1 text-sm max-w-3xl">
           Every full demo build this API process has run, with duration and
-          status. Survives tab switches; lost when the API restarts.
+          status. Survives tab switches; lost when the API restarts.{" "}
+          <span className="text-[var(--color-text-faint)] tabular-nums">
+            {pipelines.length} total
+          </span>
         </p>
       </div>
 
-      {/* KPI strip, running / failed / median duration / total. The
-          interactive ones filter the list below; click again to clear. */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <KpiCard
-          icon={Loader2}
-          label="Running"
-          value={kpis.running}
-          tone={kpis.running > 0 ? "info" : "neutral"}
-          onClick={kpis.running > 0 ? () => setStatusFilter(statusFilter === "running" ? null : "running") : undefined}
-          selected={statusFilter === "running"}
-          hint={statusFilter === "running" ? "filter active" : undefined}
-        />
-        <KpiCard
-          icon={AlertCircle}
-          label="Failed"
-          value={kpis.failed}
-          tone={kpis.failed > 0 ? "danger" : "neutral"}
-          onClick={kpis.failed > 0 ? () => setStatusFilter(statusFilter === "failed" ? null : "failed") : undefined}
-          selected={statusFilter === "failed"}
-          hint={statusFilter === "failed" ? "filter active" : undefined}
-        />
-        <KpiCard
-          icon={CheckCircle2}
-          label="Done"
-          value={kpis.done}
-          tone="success"
-          onClick={kpis.done > 0 ? () => setStatusFilter(statusFilter === "done" ? null : "done") : undefined}
-          selected={statusFilter === "done"}
-          hint={statusFilter === "done" ? "filter active" : undefined}
-        />
-        <KpiCard
-          icon={Clock}
-          label="Median duration"
-          value={formatDuration(kpis.medianDuration)}
-          tone="neutral"
-          hint={`${kpis.total} total builds`}
-        />
-      </div>
+      <PipelinesHybridList
+        pipelines={pipelines}
+        loading={list.isLoading}
+        selected={selected}
+        onSelect={(id) => setParams(id ? { p: id } : {})}
+        filterActive={false}
+      />
 
-      <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-6">
-        <PipelinesList
-          pipelines={filteredPipelines}
-          loading={list.isLoading}
-          selected={selected}
-          onSelect={(id) => setParams(id ? { p: id } : {})}
-        />
-        {selected ? (
+      {selected && (
+        <section aria-label="Pipeline inspection">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+              Inspecting
+              <span className="ml-2 font-mono text-[10px] tracking-normal normal-case text-[var(--color-text-faint)]">
+                {selected.slice(0, 8)}
+              </span>
+            </h2>
+            <button
+              type="button"
+              onClick={() => setParams({})}
+              className="text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] inline-flex items-center gap-1"
+            >
+              <X size={12} /> Close
+            </button>
+          </div>
           <PipelineEventsPanel pipelineId={selected} />
-        ) : (
-          <Card className="p-12 text-center text-[var(--color-text-faint)] flex items-center justify-center">
-            <div>
-              <FileSearch className="mx-auto opacity-40 mb-3" size={28} />
-              <div className="text-sm">Pick a pipeline to inspect.</div>
-              <div className="text-xs mt-1 max-w-sm mx-auto">
-                The Build page is where you start new pipelines; this page is
-                history + post-mortem.
-              </div>
-            </div>
-          </Card>
-        )}
-      </div>
+        </section>
+      )}
     </div>
   );
 }
 
-function PipelinesList({
-  pipelines, loading, selected, onSelect,
+// Hybrid list — KPI strip stays above (unchanged), and the previous
+// 420px master-detail "list on the left, events on the right" becomes
+// a full-width cards-on-top + paginated-table-below layout. Events
+// drill-down renders inline below the table when something is
+// selected. Pattern matches Profiles + Plans.
+function PipelinesHybridList({
+  pipelines, loading, selected, onSelect, filterActive,
 }: {
   pipelines: PipelineSummary[];
   loading: boolean;
   selected: string | null;
   onSelect: (id: string | null) => void;
+  filterActive: boolean;
 }) {
   const qc = useQueryClient();
-  /** Inline cancel from the list row — saves the click into the detail
-   *  pane just to find the Cancel button. The detail pane still has
-   *  the canonical Cancel button for users that landed there directly.
-   *  Confirm prompt because this is destructive + visible-on-list. */
+  // Inline cancel — same UX the v1 list had, lifted into the table row.
   async function cancelRow(pipeline_id: string, host: string, e: React.MouseEvent) {
     e.stopPropagation();
     if (!window.confirm(`Cancel build for ${host}? In-flight phases will stop.`)) return;
@@ -174,67 +117,154 @@ function PipelinesList({
     }
   }
 
-  return (
-    <Card className="overflow-hidden">
-      {loading ? (
+  const HIGHLIGHTS_LIMIT = 6;
+  const highlights = pipelines.slice(0, HIGHLIGHTS_LIMIT);
+  const showTable = pipelines.length > HIGHLIGHTS_LIMIT;
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(pipelines.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = pipelines.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  if (loading) {
+    return (
+      <Card>
         <div className="p-8 text-center text-[var(--color-text-faint)]">Loading…</div>
-      ) : pipelines.length === 0 ? (
-        <div className="p-8 text-center text-[var(--color-text-muted)] text-sm">
-          No pipelines in this API process.
+      </Card>
+    );
+  }
+  if (pipelines.length === 0) {
+    return (
+      <Card>
+        <div className="p-12 text-center text-[var(--color-text-muted)] text-sm">
+          {filterActive
+            ? "No pipelines match the current status filter."
+            : "No pipelines in this API process."}
         </div>
-      ) : (
-        <ul className="divide-y divide-[var(--color-border)]">
-          {pipelines.map((p) => {
-            let host = p.url;
-            try { host = new URL(p.url).host.replace(/^www\./, ""); } catch { /* keep raw */ }
-            return (
-              <li
-                key={p.pipeline_id}
-                onClick={() => onSelect(p.pipeline_id)}
-                className={cn(
-                  "px-4 py-3 cursor-pointer transition-colors",
-                  selected === p.pipeline_id ? "bg-white/[0.05]" : "hover:bg-white/[0.02]",
-                )}
-              >
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="font-mono text-xs">{p.pipeline_id.slice(0, 8)}</span>
-                  <div className="flex items-center gap-1.5">
-                    <PipelineStatusBadge status={p.status} />
-                    {p.status === "running" && (
-                      <button
-                        onClick={(e) => cancelRow(p.pipeline_id, host, e)}
-                        title="Cancel build"
-                        aria-label={`Cancel build ${p.pipeline_id.slice(0, 8)}`}
-                        className={cn(
-                          "p-1 rounded transition-colors",
-                          "text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]",
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      {/* Highlights */}
+      <section aria-label="Recent pipelines">
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+            Recent
+          </h2>
+          <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+            {highlights.length} of {pipelines.length}
+          </span>
+        </div>
+        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+          {highlights.map((p) => (
+            <PipelineKpiCard
+              key={p.pipeline_id}
+              pipeline={p}
+              compact
+              selected={selected === p.pipeline_id}
+              onClick={() => onSelect(p.pipeline_id)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* Paginated table */}
+      {showTable && (
+        <section aria-label="All pipelines">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+              All builds
+            </h2>
+            <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+              {pipelines.length} total
+            </span>
+          </div>
+          <Card className="p-0 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider border-b border-[var(--color-border)]">
+                <tr>
+                  <th className="text-left font-medium px-4 py-3">Build</th>
+                  <th className="text-left font-medium px-4 py-3">Host</th>
+                  <th className="text-left font-medium px-4 py-3">Status</th>
+                  <th className="text-right font-medium px-4 py-3">Duration</th>
+                  <th className="text-right font-medium px-4 py-3">Events</th>
+                  <th className="text-right font-medium px-4 py-3">Started</th>
+                  <th className="w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map((p) => {
+                  let host = p.url;
+                  try { host = new URL(p.url).host.replace(/^www\./, ""); } catch { /* keep raw */ }
+                  const isSelected = selected === p.pipeline_id;
+                  return (
+                    <tr
+                      key={p.pipeline_id}
+                      onClick={() => onSelect(p.pipeline_id)}
+                      className={cn(
+                        "border-b border-[var(--color-border)] last:border-0 cursor-pointer transition-colors",
+                        isSelected
+                          ? "bg-[var(--color-accent-bg)]/40"
+                          : "hover:bg-white/[0.02]",
+                      )}
+                    >
+                      <td className="px-4 py-3 font-mono text-xs">
+                        {p.pipeline_id.slice(0, 8)}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] truncate max-w-[280px]">
+                        {host}
+                      </td>
+                      <td className="px-4 py-3">
+                        <PipelineStatusBadge status={p.status} />
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-xs">
+                        {formatDuration(durationMs(p)) ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-xs">
+                        {p.event_count}
+                      </td>
+                      <td className="px-4 py-3 text-right text-xs text-[var(--color-text-muted)]">
+                        {new Date(p.started_at).toLocaleString()}
+                      </td>
+                      <td className="px-2 py-3 text-right">
+                        {p.status === "running" && (
+                          <button
+                            onClick={(e) => cancelRow(p.pipeline_id, host, e)}
+                            title="Cancel build"
+                            aria-label={`Cancel build ${p.pipeline_id.slice(0, 8)}`}
+                            className={cn(
+                              "p-1 rounded transition-colors",
+                              "text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]",
+                            )}
+                          >
+                            <X size={12} />
+                          </button>
                         )}
-                      >
-                        <X size={12} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="text-sm truncate">{p.url}</div>
-                <div className="text-xs text-[var(--color-text-faint)] mt-0.5 flex items-center gap-3">
-                  <span className="inline-flex items-center gap-1">
-                    <Clock size={10} />
-                    {formatDuration(durationMs(p))}
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <Activity size={10} />
-                    {p.event_count}
-                  </span>
-                  <span>{new Date(p.started_at).toLocaleTimeString()}</span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <Pagination
+              page={safePage}
+              pageSize={pageSize}
+              total={pipelines.length}
+              onPageChange={setPage}
+              onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+            />
+          </Card>
+        </section>
       )}
-    </Card>
+    </>
   );
 }
+
+// PipelinesList removed — its responsibilities moved into the
+// PipelinesHybridList above (cards on top + paginated table below,
+// inline cancel button preserved on the table row's right edge).
 
 function PipelineStatusBadge({ status }: { status: string }) {
   if (status === "running") {
@@ -265,7 +295,6 @@ interface PipelineEventsResponse {
 }
 
 function PipelineEventsPanel({ pipelineId }: { pipelineId: string }) {
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const events = useQuery({
     queryKey: ["pipeline-events", pipelineId],

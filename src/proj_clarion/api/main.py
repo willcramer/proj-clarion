@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from proj_clarion.api.routes import (
-    agents, dashboard, demo, health, orphans, pipelines, plans, profiles, runs, setup,
+    agents, assistant, dashboard, demo, health, orphans, pipelines, plans, profiles, runs, setup,
 )
 from proj_clarion.api.routes.demo import reap_expired_demo_sessions
 from proj_clarion.api.setup import is_setup_complete
@@ -112,6 +112,7 @@ app.include_router(profiles.router)
 app.include_router(plans.router)
 app.include_router(runs.router)
 app.include_router(agents.router)
+app.include_router(assistant.router)
 app.include_router(pipelines.router)
 app.include_router(orphans.router)
 app.include_router(demo.router)

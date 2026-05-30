@@ -12,16 +12,19 @@ import {
   X,
   Boxes,
   BookOpen,
+  Bot,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { getEnv, listPipelines } from "@/lib/api";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ClarionAssistant } from "@/components/ClarionAssistant";
 import { Logo } from "@/components/Logo";
 import { PipelineStatusPill } from "@/components/PipelineStatusPill";
 import { UserMenu } from "@/components/UserMenu";
 import { usePipeline } from "@/lib/PipelineContext";
+import { useAssistant } from "@/lib/AssistantContext";
 
 // Primary nav: the surfaces an SE hits during a live demo. The home
 // page (Dashboard) is reachable via the brand tile on the left, so a
@@ -55,22 +58,27 @@ export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
+  const assistant = useAssistant();
 
-  // ⌘K / Ctrl+K to open the command palette + Esc to close mobile nav.
-  // Single keydown handler so we don't pile up listeners, the cost of
-  // two checks per keypress is negligible vs. registering two handlers.
+  // ⌘K / Ctrl+K to open the command palette, ⌘J / Ctrl+J to toggle the
+  // Clarion assistant drawer, + Esc to close mobile nav. Single keydown
+  // handler so we don't pile up listeners, the cost of a few checks per
+  // keypress is negligible vs. registering separate handlers.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        assistant.toggle();
       } else if (e.key === "Escape" && mobileNavOpen) {
         setMobileNavOpen(false);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mobileNavOpen]);
+  }, [mobileNavOpen, assistant]);
 
   // Close the mobile drawer on route change. Without this, navigating
   // via the drawer leaves it open over the new page.
@@ -93,6 +101,11 @@ export function Layout() {
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <MobileNavDrawer open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+      {/* Global Clarion assistant, a docked right-side drawer that any
+          page can open (scoped to a plan/profile/pipeline) and that the
+          TopBar button + ⌘J toggle. Renders here so it overlays every
+          route uniformly. */}
+      <ClarionAssistant />
     </div>
   );
 }
@@ -273,6 +286,7 @@ function TopBar({
   onOpenMobileNav: () => void;
 }) {
   const location = useLocation();
+  const assistant = useAssistant();
   const env = useQuery({ queryKey: ["env"], queryFn: getEnv, refetchInterval: 30_000 });
   const mode = env.data?.mode ?? "…";
   const modeColor =
@@ -378,6 +392,40 @@ function TopBar({
               )}
             >
               <span>⌘</span><span>K</span>
+            </kbd>
+          </button>
+          {/* Clarion assistant, the agentic chat that can run builds,
+              re-run phases, extend profiles, approve plans and drive
+              demos. First-class peer to the command palette (⌘J vs ⌘K).
+              Accent-tinted when open so the SE knows the drawer is live. */}
+          <button
+            onClick={() => assistant.toggle()}
+            aria-label="Open Clarion assistant"
+            aria-keyshortcuts="Meta+J Control+J"
+            aria-pressed={assistant.open}
+            className={cn(
+              "flex items-center gap-2 h-8 pl-2.5 pr-1.5 rounded-md transition-colors",
+              assistant.open
+                ? "border border-[color:var(--color-accent-border)] bg-[var(--color-accent-bg)] text-[var(--color-accent)]"
+                : "border border-[var(--color-border)] bg-[var(--color-canvas-elev1)]/70 text-[var(--color-text-muted)] hover:bg-[var(--color-canvas-elev2)] hover:border-[var(--color-border-strong)] focus-visible:border-[color:var(--color-accent-border)]",
+            )}
+          >
+            <Bot
+              size={14}
+              aria-hidden="true"
+              className={assistant.open ? "text-[var(--color-accent)]" : "text-[var(--color-text-faint)]"}
+            />
+            <span className="hidden sm:inline">Assistant</span>
+            <kbd
+              className={cn(
+                "hidden sm:inline-flex items-center gap-0.5 ml-1 px-1.5 py-0.5 rounded",
+                "text-[10px] font-mono",
+                assistant.open
+                  ? "border border-[color:var(--color-accent-border)]/50 text-[var(--color-accent)]"
+                  : "border border-[var(--color-border)] bg-[var(--color-canvas)]/60 text-[var(--color-text-faint)]",
+              )}
+            >
+              <span>⌘</span><span>J</span>
             </kbd>
           </button>
           {/* User menu, identity, theme toggle, Settings, Sign out.

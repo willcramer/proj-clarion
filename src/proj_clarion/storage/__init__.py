@@ -15,12 +15,16 @@ from proj_clarion.storage.db import build_dsn, connect, session_scope
 from proj_clarion.storage.migrator import apply_migrations, drop_all
 from proj_clarion.storage.repositories import (
     AgentToolCallRepo,
+    AssistantConversationRepo,
+    AssistantTurnRepo,
     AuditRepo,
     DemoSessionRepo,
     KGRepo,
     LlmCallRepo,
     LlmEvalRepo,
     PipelineRepo,
+    PlanRefinementSessionRepo,
+    PlanRefinementTurnRepo,
     PlanRepo,
     PolicyViolationRepo,
     ProfileAuditRepo,
@@ -30,12 +34,16 @@ from proj_clarion.storage.repositories import (
 
 __all__ = [
     "AgentToolCallRepo",
+    "AssistantConversationRepo",
+    "AssistantTurnRepo",
     "AuditRepo",
     "DemoSessionRepo",
     "KGRepo",
     "LlmCallRepo",
     "LlmEvalRepo",
     "PipelineRepo",
+    "PlanRefinementSessionRepo",
+    "PlanRefinementTurnRepo",
     "PlanRepo",
     "PolicyViolationRepo",
     "ProfileAuditRepo",

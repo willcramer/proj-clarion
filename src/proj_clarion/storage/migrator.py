@@ -88,6 +88,18 @@ def drop_all(engine: Engine | None = None) -> None:
         "agent_tool_calls",
         "llm_evals",
         "llm_calls",
+        # Clarion Assistant chat — turns FK into conversations; child
+        # listed first. No FK to plans/profiles even though turns may
+        # reference them via context_scope — assistant history is
+        # supposed to survive deletes elsewhere in the system.
+        "assistant_turns",
+        "assistant_conversations",
+        # plan_refinement_turns FK into plan_refinement_sessions; child
+        # listed first. sessions have no FK to demo_plans (audit
+        # semantics — survive a plan delete) so they go at the same
+        # rank as plan_audit_log.
+        "plan_refinement_turns",
+        "plan_refinement_sessions",
         "plan_audit_log",
         "profile_audit_log",
         "business_events",

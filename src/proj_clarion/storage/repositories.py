@@ -695,8 +695,13 @@ class PipelineRepo:
         limit: int | None = None,
     ) -> list[tuple[int, dict[str, Any]]]:
         """Return [(seq, event_json), ...] in seq order. `after_seq`
-        lets a stream consumer pick up where it left off."""
-        sql = "SELECT seq, event FROM pipeline_events WHERE pipeline_id = :pid"
+        lets a stream consumer pick up where it left off.
+
+        Each event dict is augmented with `ts` — the row's commit
+        wall-clock as an ISO string — UNLESS the event already carries
+        one. Clients use it to reconstruct true phase/pipeline timings on
+        replay (a refresh must not reset the elapsed ticker to "now")."""
+        sql = "SELECT seq, event, ts FROM pipeline_events WHERE pipeline_id = :pid"
         params: dict[str, Any] = {"pid": pipeline_id}
         if after_seq is not None:
             sql += " AND seq > :after"
@@ -706,7 +711,13 @@ class PipelineRepo:
             sql += " LIMIT :lim"
             params["lim"] = limit
         rows = session.execute(text(sql), params).fetchall()
-        return [(r[0], r[1]) for r in rows]
+        out: list[tuple[int, dict[str, Any]]] = []
+        for r in rows:
+            ev = dict(r[1])
+            if r[2] is not None and "ts" not in ev:
+                ev["ts"] = r[2].isoformat()
+            out.append((r[0], ev))
+        return out
 
     def event_count(self, session: Session, pipeline_id: str) -> int:
         return session.execute(
@@ -1515,9 +1526,450 @@ class SystemHealthRepo:
         ]
 
 
+# ============================================================
+# PlanRefinementSessionRepo + PlanRefinementTurnRepo — the Refine-via-
+# chat surface on Plan detail. Sessions group N turns of conversation
+# with the planner agent; turns hold the tool-use structured proposals.
+#
+# Lifecycle: open → (turns appended over time) → summarized → applied
+# (terminal) or cancelled (terminal). Status transitions are explicit
+# helper methods rather than a generic `update_status` so the call
+# sites remain auditable.
+# ============================================================
+
+class PlanRefinementSessionRepo:
+    """One open session per plan at a time (enforced by partial unique
+    index). Many historical rows kept for audit / forensics. plan_id is
+    not an FK so sessions survive plan deletes."""
+
+    def create_session(self, session: Session, plan_id: str) -> dict[str, Any]:
+        """Create a fresh 'open' session for this plan. Raises if one is
+        already open (the partial unique index rejects). Callers should
+        prefer `ensure_open_session()` which is idempotent."""
+        row = session.execute(
+            text("""
+                INSERT INTO plan_refinement_sessions (plan_id, status)
+                VALUES (:pid, 'open')
+                RETURNING session_id, plan_id, status, summary_cache,
+                          phase_decision, created_at, updated_at
+            """),
+            {"pid": plan_id},
+        ).fetchone()
+        return _refinement_session_row(row)
+
+    def get_open_session(
+        self, session: Session, plan_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the open session for this plan, or None. Used by the
+        chat endpoint to find-or-create on each user turn."""
+        row = session.execute(
+            text("""
+                SELECT session_id, plan_id, status, summary_cache,
+                       phase_decision, created_at, updated_at
+                FROM plan_refinement_sessions
+                WHERE plan_id = :pid AND status = 'open'
+                LIMIT 1
+            """),
+            {"pid": plan_id},
+        ).fetchone()
+        return _refinement_session_row(row) if row else None
+
+    def ensure_open_session(
+        self, session: Session, plan_id: str,
+    ) -> dict[str, Any]:
+        """Idempotent: return the existing open session, or create one.
+        Used by the chat endpoint so the first user turn implicitly
+        opens a session without an explicit start call."""
+        existing = self.get_open_session(session, plan_id)
+        if existing is not None:
+            return existing
+        return self.create_session(session, plan_id)
+
+    def get_session(
+        self, session: Session, session_id: int,
+    ) -> dict[str, Any] | None:
+        row = session.execute(
+            text("""
+                SELECT session_id, plan_id, status, summary_cache,
+                       phase_decision, created_at, updated_at
+                FROM plan_refinement_sessions
+                WHERE session_id = :sid
+            """),
+            {"sid": int(session_id)},
+        ).fetchone()
+        return _refinement_session_row(row) if row else None
+
+    def list_for_plan(
+        self, session: Session, plan_id: str, *, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """All sessions for this plan, newest first. Powers the history
+        selector on the Refine tab. Each row includes a turn_count via
+        correlated subquery — cheap because the partial index on
+        plan_refinement_turns(session_id, turn_id) makes count-by-
+        session fast."""
+        rows = session.execute(
+            text("""
+                SELECT prs.session_id, prs.plan_id, prs.status,
+                       prs.summary_cache, prs.phase_decision,
+                       prs.created_at, prs.updated_at,
+                       (SELECT COUNT(*) FROM plan_refinement_turns prt
+                        WHERE prt.session_id = prs.session_id) AS turn_count
+                FROM plan_refinement_sessions prs
+                WHERE prs.plan_id = :pid
+                ORDER BY prs.created_at DESC
+                LIMIT :lim
+            """),
+            {"pid": plan_id, "lim": int(limit)},
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = _refinement_session_row(r)
+            d["turn_count"] = int(r[7])
+            out.append(d)
+        return out
+
+    def close_session(
+        self, session: Session, session_id: int, status: str,
+    ) -> None:
+        """Move a session to a terminal status. Allowed terminals:
+        'summarized', 'applied', 'cancelled'. The CHECK constraint on
+        the table enforces the value; we don't pre-validate here so
+        bad callers get a database error rather than a silent no-op."""
+        session.execute(
+            text("""
+                UPDATE plan_refinement_sessions
+                SET status = :st
+                WHERE session_id = :sid
+            """),
+            {"st": status, "sid": int(session_id)},
+        )
+
+    def set_summary(
+        self, session: Session, session_id: int, summary: dict[str, Any],
+    ) -> None:
+        """Cache the collapsed summary blob on the session row. Called
+        by /summarize; the apply step reads from this cache rather than
+        re-collapsing the turns."""
+        session.execute(
+            text("""
+                UPDATE plan_refinement_sessions
+                SET summary_cache = CAST(:s AS JSONB),
+                    status = CASE WHEN status = 'open' THEN 'summarized' ELSE status END
+                WHERE session_id = :sid
+            """),
+            {"s": json.dumps(summary), "sid": int(session_id)},
+        )
+
+    def set_phase_decision(
+        self, session: Session, session_id: int, decision: str,
+    ) -> None:
+        """Record which pipeline phase /apply chose to re-run from.
+        CHECK constraint on the column restricts values to
+        'plan' | 'research+plan' | 'full'."""
+        session.execute(
+            text("""
+                UPDATE plan_refinement_sessions
+                SET phase_decision = :d
+                WHERE session_id = :sid
+            """),
+            {"d": decision, "sid": int(session_id)},
+        )
+
+
+class PlanRefinementTurnRepo:
+    """Message-level history within a refinement session. Append-only;
+    turns are never updated after insert (assistant content is buffered
+    in memory while streaming, then the final text + proposed_changes
+    are inserted as one row)."""
+
+    def append_turn(
+        self,
+        session: Session,
+        session_id: int,
+        *,
+        role: str,
+        content: str,
+        proposed_changes: list[dict[str, Any]] | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
+    ) -> dict[str, Any]:
+        """Insert one user-or-assistant turn. `proposed_changes` is the
+        list of ProposedChange entries Claude's tool_use block produced
+        — only set on assistant turns; user turns leave it NULL."""
+        row = session.execute(
+            text("""
+                INSERT INTO plan_refinement_turns
+                  (session_id, role, content, proposed_changes,
+                   tokens_in, tokens_out)
+                VALUES
+                  (:sid, :role, :content,
+                   CAST(:pc AS JSONB), :ti, :to)
+                RETURNING turn_id, session_id, role, content,
+                          proposed_changes, tokens_in, tokens_out, created_at
+            """),
+            {
+                "sid":     int(session_id),
+                "role":    role,
+                "content": content,
+                "pc":      json.dumps(proposed_changes) if proposed_changes is not None else None,
+                "ti":      tokens_in,
+                "to":      tokens_out,
+            },
+        ).fetchone()
+        return _refinement_turn_row(row)
+
+    def list_turns(
+        self, session: Session, session_id: int,
+    ) -> list[dict[str, Any]]:
+        """All turns of a session in chronological order."""
+        rows = session.execute(
+            text("""
+                SELECT turn_id, session_id, role, content,
+                       proposed_changes, tokens_in, tokens_out, created_at
+                FROM plan_refinement_turns
+                WHERE session_id = :sid
+                ORDER BY turn_id ASC
+            """),
+            {"sid": int(session_id)},
+        ).fetchall()
+        return [_refinement_turn_row(r) for r in rows]
+
+
+def _refinement_session_row(r) -> dict[str, Any]:
+    """Shape one plan_refinement_sessions row into the dict the API
+    + UI consume. JSONB columns come back as dicts already."""
+    return {
+        "session_id":     r[0],
+        "plan_id":        r[1],
+        "status":         r[2],
+        "summary_cache":  r[3],  # JSONB → dict or None
+        "phase_decision": r[4],
+        "created_at":     r[5],
+        "updated_at":     r[6],
+    }
+
+
+def _refinement_turn_row(r) -> dict[str, Any]:
+    """Shape one plan_refinement_turns row. `proposed_changes` is a
+    JSONB list; the driver hands it back as a Python list or None."""
+    return {
+        "turn_id":          r[0],
+        "session_id":       r[1],
+        "role":             r[2],
+        "content":          r[3],
+        "proposed_changes": r[4],  # list[dict] or None
+        "tokens_in":        r[5],
+        "tokens_out":       r[6],
+        "created_at":       r[7],
+    }
+
+
+# ============================================================
+# AssistantConversationRepo + AssistantTurnRepo — global Clarion
+# Assistant chat. Each conversation is a persistent thread; each turn
+# is one role-tagged message (user / assistant / tool).
+#
+# Lifecycle:
+#   active  → archived  (no auto-archive; SE explicitly archives or
+#                        the UI does it when starting fresh)
+#
+# Turn roles:
+#   user      — SE-typed prompt
+#   assistant — agent narrative + optional tool_calls
+#   tool      — backend executed a tool, this turn ships the result
+#               back to Claude on the next iteration of the agent loop
+# ============================================================
+
+class AssistantConversationRepo:
+    """One row per persistent chat thread. Single-tenant today but
+    keyed by `actor` so multi-user is a non-migration away."""
+
+    def create_conversation(
+        self, session: Session, *, actor: str = "se", title: str | None = None,
+    ) -> dict[str, Any]:
+        """Open a fresh conversation. `title` is typically null at
+        create time — the LLM auto-titles after the first exchange."""
+        row = session.execute(
+            text("""
+                INSERT INTO assistant_conversations (actor, title, status)
+                VALUES (:actor, :title, 'active')
+                RETURNING conversation_id, actor, title, status,
+                          created_at, updated_at, last_message_at
+            """),
+            {"actor": actor, "title": title},
+        ).fetchone()
+        return _assistant_conversation_row(row)
+
+    def get_conversation(
+        self, session: Session, conversation_id: int,
+    ) -> dict[str, Any] | None:
+        row = session.execute(
+            text("""
+                SELECT conversation_id, actor, title, status,
+                       created_at, updated_at, last_message_at
+                FROM assistant_conversations
+                WHERE conversation_id = :cid
+            """),
+            {"cid": int(conversation_id)},
+        ).fetchone()
+        return _assistant_conversation_row(row) if row else None
+
+    def list_conversations(
+        self, session: Session, *,
+        actor: str = "se", status: str = "active", limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Newest-message-first list for the conversation picker."""
+        rows = session.execute(
+            text("""
+                SELECT conversation_id, actor, title, status,
+                       created_at, updated_at, last_message_at
+                FROM assistant_conversations
+                WHERE actor = :actor AND status = :status
+                ORDER BY COALESCE(last_message_at, updated_at) DESC
+                LIMIT :lim
+            """),
+            {"actor": actor, "status": status, "lim": int(limit)},
+        ).fetchall()
+        return [_assistant_conversation_row(r) for r in rows]
+
+    def update_title(
+        self, session: Session, conversation_id: int, title: str,
+    ) -> None:
+        session.execute(
+            text("""
+                UPDATE assistant_conversations
+                SET title = :t
+                WHERE conversation_id = :cid
+            """),
+            {"t": title, "cid": int(conversation_id)},
+        )
+
+    def archive_conversation(
+        self, session: Session, conversation_id: int,
+    ) -> None:
+        session.execute(
+            text("""
+                UPDATE assistant_conversations
+                SET status = 'archived'
+                WHERE conversation_id = :cid
+            """),
+            {"cid": int(conversation_id)},
+        )
+
+    def touch_last_message(
+        self, session: Session, conversation_id: int,
+    ) -> None:
+        """Bump last_message_at to NOW(). Called after each turn lands
+        so the conversation rises to the top of the picker."""
+        session.execute(
+            text("""
+                UPDATE assistant_conversations
+                SET last_message_at = NOW()
+                WHERE conversation_id = :cid
+            """),
+            {"cid": int(conversation_id)},
+        )
+
+
+class AssistantTurnRepo:
+    """Append-only message log within a conversation. Turns are never
+    updated after insert — even the streamed assistant turn is buffered
+    in memory until complete, then persisted as one immutable row."""
+
+    def append_turn(
+        self,
+        session: Session,
+        conversation_id: int,
+        *,
+        role: str,
+        content: str = "",
+        tool_calls: list[dict[str, Any]] | None = None,
+        tool_results: list[dict[str, Any]] | None = None,
+        context_scope: dict[str, Any] | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
+    ) -> dict[str, Any]:
+        row = session.execute(
+            text("""
+                INSERT INTO assistant_turns
+                  (conversation_id, role, content,
+                   tool_calls, tool_results, context_scope,
+                   tokens_in, tokens_out)
+                VALUES
+                  (:cid, :role, :content,
+                   CAST(:tc AS JSONB), CAST(:tr AS JSONB), CAST(:cs AS JSONB),
+                   :ti, :to)
+                RETURNING turn_id, conversation_id, role, content,
+                          tool_calls, tool_results, context_scope,
+                          tokens_in, tokens_out, created_at
+            """),
+            {
+                "cid":     int(conversation_id),
+                "role":    role,
+                "content": content,
+                "tc":      json.dumps(tool_calls)    if tool_calls   is not None else None,
+                "tr":      json.dumps(tool_results)  if tool_results is not None else None,
+                "cs":      json.dumps(context_scope) if context_scope is not None else None,
+                "ti":      tokens_in,
+                "to":      tokens_out,
+            },
+        ).fetchone()
+        return _assistant_turn_row(row)
+
+    def list_turns(
+        self, session: Session, conversation_id: int,
+    ) -> list[dict[str, Any]]:
+        """All turns in chronological order. The agent loop reads
+        these and rebuilds the Anthropic messages array."""
+        rows = session.execute(
+            text("""
+                SELECT turn_id, conversation_id, role, content,
+                       tool_calls, tool_results, context_scope,
+                       tokens_in, tokens_out, created_at
+                FROM assistant_turns
+                WHERE conversation_id = :cid
+                ORDER BY turn_id ASC
+            """),
+            {"cid": int(conversation_id)},
+        ).fetchall()
+        return [_assistant_turn_row(r) for r in rows]
+
+
+def _assistant_conversation_row(r) -> dict[str, Any]:
+    """Shape one assistant_conversations row for the API."""
+    return {
+        "conversation_id": r[0],
+        "actor":           r[1],
+        "title":           r[2],
+        "status":          r[3],
+        "created_at":      r[4],
+        "updated_at":      r[5],
+        "last_message_at": r[6],
+    }
+
+
+def _assistant_turn_row(r) -> dict[str, Any]:
+    """Shape one assistant_turns row. JSONB columns come back as
+    dicts/lists from the driver — passed through as-is."""
+    return {
+        "turn_id":         r[0],
+        "conversation_id": r[1],
+        "role":            r[2],
+        "content":         r[3],
+        "tool_calls":      r[4],   # list[dict] or None
+        "tool_results":    r[5],   # list[dict] or None
+        "context_scope":   r[6],   # dict or None
+        "tokens_in":       r[7],
+        "tokens_out":      r[8],
+        "created_at":      r[9],
+    }
+
+
 __all__: Iterable[str] = [
     "AgentToolCallRepo",
+    "AssistantConversationRepo", "AssistantTurnRepo",
     "AuditRepo", "DemoSessionRepo", "KGRepo", "LlmCallRepo", "LlmEvalRepo",
-    "PipelineRepo", "PlanRepo", "PolicyViolationRepo",
+    "PipelineRepo", "PlanRefinementSessionRepo", "PlanRefinementTurnRepo",
+    "PlanRepo", "PolicyViolationRepo",
     "ProfileAuditRepo", "ProfileRepo", "SystemHealthRepo",
 ]

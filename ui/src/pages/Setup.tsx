@@ -24,7 +24,7 @@
  */
 import {
   CheckCircle2, AlertCircle, Eye, EyeOff, ExternalLink, Loader2,
-  Upload, KeyRound, Settings2, Check, Lock,
+  Upload, KeyRound, Check, Lock,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
@@ -1171,72 +1171,6 @@ function PasteUpload({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────
-// Save box, ready-state + button + error
-// ──────────────────────────────────────────────────────────────────
-
-function SaveBox({
-  ready, saving, error, onSave,
-}: {
-  ready: boolean;
-  saving: boolean;
-  error: string | null;
-  onSave: () => void;
-}) {
-  return (
-    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        <KeyRound size={14} className="text-[var(--color-text-faint)]" />
-        <h2 className="text-sm font-medium text-[var(--color-text)]">Save & launch</h2>
-      </div>
-      <p className="text-xs text-[var(--color-text-muted)]">
-        Writes your tokens to <code>.env</code> on this machine. We back up the previous file to
-        <code className="ml-1">.env.bak</code> so you can roll back.
-      </p>
-      <button
-        type="button"
-        onClick={onSave}
-        disabled={!ready || saving}
-        className={cn(
-          "w-full px-3 py-2 rounded-md text-sm font-medium transition-colors",
-          ready && !saving
-            ? "bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent-hover)]"
-            : "bg-[var(--color-canvas-elev2)] text-[var(--color-text-faint)] cursor-not-allowed",
-        )}
-      >
-        {saving ? (
-          <span className="inline-flex items-center gap-2">
-            <Loader2 size={14} className="animate-spin" /> Saving…
-          </span>
-        ) : ready ? (
-          "Save & launch Clarion"
-        ) : (
-          "Fill required fields to continue"
-        )}
-      </button>
-      {error && (
-        <div className="text-xs text-[var(--color-danger)] flex items-start gap-1.5">
-          <AlertCircle size={12} className="shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
-      <details className="text-xs text-[var(--color-text-faint)]">
-        <summary className="cursor-pointer hover:text-[var(--color-text-muted)] inline-flex items-center gap-1">
-          <Settings2 size={11} /> Advanced
-        </summary>
-        <div className="mt-2 space-y-1">
-          <div>
-            You can also edit <code>.env</code> directly, then refresh this page.
-          </div>
-          <div>
-            Required fields: marked with <span className="text-[var(--color-danger)]">*</span>.
-          </div>
-        </div>
-      </details>
     </div>
   );
 }

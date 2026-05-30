@@ -125,7 +125,7 @@ export function HeroBuildCard({
             inputMode="url"
             autoComplete="off"
             spellCheck={false}
-            placeholder="acmecorp.com"
+            placeholder="grafana.com"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             aria-label="Prospect URL"

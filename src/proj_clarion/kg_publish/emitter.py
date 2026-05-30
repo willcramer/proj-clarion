@@ -257,6 +257,26 @@ def _observation_attrs(
     if site:
         attrs["asserts_site"] = site
 
+    # Plant / facility geolocation. When the planner (or a hand-patched
+    # plan) supplies latitude/longitude on a business_entity node, surface
+    # them as labels so a Geomap panel can render the facility footprint.
+    # Companion attrs (city, country, iso_certs, operating_status,
+    # production_lines) light up table panels and the entity-detail view.
+    # All copied verbatim; absent attrs are dropped by the empty-string
+    # filter at the bottom of this function.
+    for attr_key, label_key in (
+        ("latitude",          "clarion_latitude"),
+        ("longitude",         "clarion_longitude"),
+        ("city",              "clarion_city"),
+        ("country",           "clarion_country"),
+        ("iso_certs",         "clarion_iso_certs"),
+        ("operating_status",  "clarion_operating_status"),
+        ("production_lines",  "clarion_production_lines"),
+    ):
+        v = (node.attributes.get(attr_key) or "").strip() if isinstance(node.attributes.get(attr_key), str) else node.attributes.get(attr_key)
+        if v not in (None, "", []):
+            attrs[label_key] = str(v)
+
     # Business-line scoping for demos. Entities anchored at (or
     # descending from) a BusinessUnit / Brand / Store carry this label
     # so the Asserts entity graph filter can narrow to a single line of
@@ -387,18 +407,25 @@ class EntityEmitter:
         self._plan_id = str(plan.plan_id)
         self._kg = kg
         self._customer = customer or _slug_for_plan(plan)
-        # Default `asserts.env` to the canonical Clarion env value
-        # (CLARION_ASSERTS_ENV, default `dev`) so every demo's KG
-        # entities collapse into the same Asserts env scope along with
-        # the spans + metrics. The pre-2026-05 behaviour defaulted this
-        # to the customer slug, which caused asserts_env to drift away
-        # from deployment.environment and the customer's KG entities
-        # to vanish from the canonical "dev" entity graph (seen on the
-        # Caterpillar run: asserts_env=caterpillar instead of dev).
-        # CLI `--env <value>` still overrides for unusual cases
-        # (multi-environment demos, customer-isolated tenants).
-        from proj_clarion.observability.otlp import clarion_env as _clarion_env
-        self._env = env or _clarion_env()
+        # Default `asserts.env` to the customer slug so the Asserts
+        # entity-graph "env" filter naturally separates demos: each
+        # customer's entities live in their own scope (env=acme_retail,
+        # env=globex_mfg, etc.) instead of collapsing into a shared
+        # env=dev where joins fail to fire across tiers.
+        #
+        # Why not default to CLARION_ASSERTS_ENV ("dev")? Mimir's
+        # OTLP→Prom translation derives `target_info`'s asserts_env
+        # label from `deployment.environment`, not `asserts.env`. When
+        # the two diverged in v0.8.0, target_info / clarion_entity_info
+        # landed under env=dev while only observation-attr metrics
+        # (kube_node_info) followed --env, breaking cross-tier joins.
+        # Keeping the two aligned to the customer slug restores the
+        # pre-v0.8 working state. See clarion_resource() call in
+        # `start()` which also pins deployment.environment to match.
+        #
+        # CLI `--env <value>` still overrides for multi-environment
+        # demos (staging-acme_retail, prod-acme_retail, etc.).
+        self._env = env or self._customer
         self._site = site
         self._export_interval_ms = export_interval_seconds * 1000
         self._provider: MeterProvider | None = None
@@ -452,12 +479,20 @@ class EntityEmitter:
         # ONE Resource: identifies the emitter itself, NOT the entities.
         # Service entity processor will see this as a single Service (the
         # emitter), not one Service per emitted entity.
+        # Pin `deployment.environment` to the same value as `asserts.env`
+        # via `extra`. Mimir's OTLP→Prom translation uses
+        # `deployment.environment` (not `asserts.env`) when stamping the
+        # `asserts_env` label on auto-generated `target_info` series.
+        # Without this override, target_info would land at the default
+        # "dev" deployment env while observation-attr metrics correctly
+        # carry env=<customer>, splitting the KG across two env scopes.
         resource = clarion_resource(
             service_name="proj-clarion-kg-emitter",
             plan_id=self._plan_id,
             customer=self._customer,
             env=self._env,
             site=self._site,
+            extra={"deployment.environment": self._env},
         )
 
         reader = PeriodicExportingMetricReader(

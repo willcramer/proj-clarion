@@ -89,6 +89,32 @@ const INITIAL: PipelineUiState = {
   error: null,
 };
 
+/** When a pipeline reaches a terminal state, any phase still showing
+ *  "running" is a lie (the orchestrator may have crashed mid-phase
+ *  without emitting phase:failed). Force-flip those to `s` and stamp a
+ *  finishedAt so the per-row spinners stop and durations stay sane. */
+function forceTerminatePhases(
+  phases: Record<PipelinePhase, PhaseState>, s: PhaseStatus, now: number,
+): Record<PipelinePhase, PhaseState> {
+  const out = { ...phases };
+  for (const p of Object.keys(out) as PipelinePhase[]) {
+    if (out[p].status === "running") {
+      out[p] = { ...out[p], status: s, finishedAt: out[p].finishedAt ?? now };
+    }
+  }
+  return out;
+}
+
+/** Wall-clock for an event: the server-stamped `ts` (injected by the
+ *  repo on replay) so reloading mid-build keeps real timings, falling
+ *  back to `now` for any event without one (shouldn't happen post-fix). */
+function evTs(ev: PipelineEvent, now: number): number {
+  const t = (ev as { ts?: string }).ts;
+  if (!t) return now;
+  const ms = new Date(t).getTime();
+  return Number.isNaN(ms) ? now : ms;
+}
+
 interface PipelineContextValue extends PipelineUiState {
   /** Start a new pipeline. Returns the pipeline_id.
    *  `stop_after_phase` cuts the build short after that phase completes
@@ -125,6 +151,10 @@ interface PipelineContextValue extends PipelineUiState {
    *  cost both times. If everything was done already, falls back to
    *  null (caller can choose: run fresh or no-op). */
   smartResume: (pipelineId: string) => Promise<string | null>;
+  /** Reconcile the followed pipeline against the server's status — flips
+   *  a stuck "running" view to its real terminal state (used after a
+   *  cancel, or when a stream dies without a terminal event). */
+  reconcile: (pipelineId: string) => Promise<void>;
   /** Reset the UI back to the form. Doesn't cancel the server-side pipeline. */
   reset: () => void;
 }
@@ -141,6 +171,10 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   const applyEvent = useCallback((ev: PipelineEvent) => {
     setState((prev) => {
       const now = Date.now();
+      // Prefer the server-stamped event time so replaying the log on a
+      // refresh reconstructs the REAL elapsed, not "now". (Without this
+      // the duration ticker resets to 0 on every reload.)
+      const at = evTs(ev, now);
       if (ev.event === "pipeline") {
         if (ev.status === "started") {
           return {
@@ -149,44 +183,30 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
             url: ev.url,
             company: ev.company,
             days: ev.days,
-            startedAt: prev.startedAt ?? now,
+            startedAt: prev.startedAt ?? at,
           };
         }
-        // Defensive: when the pipeline reaches a terminal state, ANY
-        // phase still showing "running" is a lie (the orchestrator
-        // crashed mid-phase and may not have emitted phase:failed).
-        // Force-flip them to "failed" so the per-row icons stop
-        // spinning and match the top-level status. Also stamp
-        // finishedAt on those phases so duration numbers stay sane.
-        const forceTerminate = (s: PhaseStatus): Record<PipelinePhase, PhaseState> => {
-          const out = { ...prev.phases };
-          for (const p of Object.keys(out) as PipelinePhase[]) {
-            if (out[p].status === "running") {
-              out[p] = { ...out[p], status: s, finishedAt: out[p].finishedAt ?? now };
-            }
-          }
-          return out;
-        };
+        const forceTerminate = (s: PhaseStatus) => forceTerminatePhases(prev.phases, s, at);
 
         if (ev.status === "done") {
           return {
             ...prev, status: "done",
             phases: forceTerminate("done"),
-            finishedAt: prev.finishedAt ?? now,
+            finishedAt: prev.finishedAt ?? at,
           };
         }
         if (ev.status === "failed") {
           return {
             ...prev, status: "failed", error: ev.error,
             phases: forceTerminate("failed"),
-            finishedAt: prev.finishedAt ?? now,
+            finishedAt: prev.finishedAt ?? at,
           };
         }
         if (ev.status === "cancelled") {
           return {
             ...prev, status: "cancelled",
             phases: forceTerminate("failed"),
-            finishedAt: prev.finishedAt ?? now,
+            finishedAt: prev.finishedAt ?? at,
           };
         }
       }
@@ -212,8 +232,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
               ("plan_id" in ev && ev.plan_id)       ? ev.plan_id :
               cur.artifact,
             error: ev.status === "failed" ? ev.error : cur.error,
-            startedAt: ev.status === "started" ? (cur.startedAt ?? now) : cur.startedAt,
-            finishedAt: ev.status !== "started" ? (cur.finishedAt ?? now) : cur.finishedAt,
+            startedAt: ev.status === "started" ? (cur.startedAt ?? at) : cur.startedAt,
+            finishedAt: ev.status !== "started" ? (cur.finishedAt ?? at) : cur.finishedAt,
           },
         };
         const next: Partial<PipelineUiState> = { phases };
@@ -248,6 +268,35 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
    *  time after a refresh, not the moment we re-attached. Without this
    *  the SSE replay re-stamps `pipeline:started` with Date.now(), which
    *  silently zeroes the timer. */
+  /** The SSE stream can close WITHOUT delivering a terminal pipeline
+   *  event — the orchestrator process died, the network dropped, or the
+   *  build was cancelled out-of-band (e.g. from the assistant). Without
+   *  this we'd stay stuck on "running" forever, showing a Stop button
+   *  that calls cancel on a dead pipeline and never updates. Reconcile
+   *  against the server's canonical status and synthesize the matching
+   *  terminal transition so the UI converges. */
+  const reconcileTerminal = useCallback(async (pipelineId: string) => {
+    const summary = await getPipeline(pipelineId).catch(() => null);
+    const status = summary?.status;
+    if (status !== "done" && status !== "failed" && status !== "cancelled") return;
+    setState((prev) => {
+      // Only act if we're still following THIS pipeline as running.
+      if (prev.pipelineId !== pipelineId || prev.status !== "running") return prev;
+      const now = Date.now();
+      const phaseTone: PhaseStatus = status === "done" ? "done" : "failed";
+      return {
+        ...prev,
+        status,
+        error: status === "failed"
+          ? (prev.error ?? "Build failed (stream closed before the error detail arrived).")
+          : prev.error,
+        phases: forceTerminatePhases(prev.phases, phaseTone, now),
+        finishedAt: prev.finishedAt
+          ?? (summary?.finished_at ? new Date(summary.finished_at).getTime() : now),
+      };
+    });
+  }, []);
+
   const follow = useCallback((pipelineId: string, seed?: Partial<PipelineUiState>) => {
     closeRef.current?.();
     setState((prev) => ({
@@ -255,11 +304,13 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     }));
     localStorage.setItem(STORAGE_KEY, pipelineId);
     closeRef.current = streamPipeline(pipelineId, applyEvent, () => {
-      // EventSource closed (e.g. pipeline terminated). Don't blow away the
-      // accumulated state; just stop following.
+      // EventSource closed. If a terminal event already landed this is a
+      // no-op; otherwise reconcile against the server so we don't get
+      // stuck showing "running" with a dead Stop button.
       closeRef.current = null;
+      void reconcileTerminal(pipelineId);
     });
-  }, [applyEvent]);
+  }, [applyEvent, reconcileTerminal]);
 
   /** App-mount: resume an in-flight pipeline if there is one. We check
    *  localStorage first (sticky pointer for the user's last build) and
@@ -359,7 +410,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     // Terminal: fetch the full event log, prime state with canonical
     // start/finish times, then replay.
     const snap = await getPipelineEvents(pipelineId).catch(() => null);
-    setState((prev) => ({
+    setState(() => ({
       ...INITIAL,
       pipelineId,
       status: "running", // gets terminal-flipped by the replayed pipeline:done/failed event
@@ -434,7 +485,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ ...state, start, startFromPhase, loadPipeline, smartResume, reset }}>
+    <Ctx.Provider value={{ ...state, start, startFromPhase, loadPipeline, smartResume, reconcile: reconcileTerminal, reset }}>
       {children}
     </Ctx.Provider>
   );

@@ -98,22 +98,6 @@ export const listProfiles = () => request<ProfileSummary[]>("/profiles");
 export const getProfile = (id: string) =>
   request<unknown>(`/profiles/${encodeURIComponent(id)}`);
 
-export interface ExtendProfileResult {
-  summary: string;
-  additions: Record<string, number>;
-  profile: unknown;
-}
-
-/** Apply an SE-driven, agent-produced extension to a profile.
- *  One-shot (no streaming yet). Returns a summary + per-field counts
- *  of what was added; the UI refetches getProfile to render the
- *  extended state. */
-export const extendProfile = (id: string, prompt: string) =>
-  request<ExtendProfileResult>(
-    `/profiles/${encodeURIComponent(id)}/extend`,
-    { method: "POST", body: JSON.stringify({ prompt }) },
-  );
-
 export interface AcceptClaimResult {
   /** Synthesized-flag count after the action. UI uses it to update
    *  the Claims tab pill without an extra refetch. */
@@ -159,13 +143,6 @@ export interface GlobalProfileAuditResponse {
   limit: number;
   offset: number;
 }
-
-/** All extends for one profile, newest first. Used by the Profile
- *  detail's extend-chat panel to render server-side history on mount. */
-export const getProfileAudit = (profile_id: string) =>
-  request<ProfileAuditEntry[]>(
-    `/profiles/${encodeURIComponent(profile_id)}/audit`,
-  );
 
 /** Global cross-profile feed for the /audit page's Profile changes
  *  section. Pagination matches the other audit feeds. */
@@ -624,74 +601,237 @@ export function streamPipeline(
   };
 }
 
-// ─── Agent chat (research extend / plan refine) ────────────────────
+// ─── Global Clarion Assistant ──────────────────────────────────────
+//
+// The single, app-wide agent. Multi-turn tool-use loop server-side;
+// the client streams text deltas + tool_call / tool_result events and
+// persists everything to assistant_conversations / assistant_turns.
 
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
+/** Page context pinned to a turn so the agent can resolve "this plan". */
+export interface AssistantContextScope {
+  plan_id?: string;
+  profile_id?: string;
+  pipeline_id?: string;
+  route?: string;
 }
 
-/** Stream an agent reply token-by-token. Returns the AbortController so the
- *  caller can stop the stream mid-flight. */
-export async function streamAgent(
-  endpoint: "research/extend" | "plan/refine",
-  context_id: string,
-  history: ChatMessage[],
-  onDelta: (s: string) => void,
-  onDone: () => void,
-  onError: (e: string) => void,
-): Promise<AbortController> {
-  const controller = new AbortController();
-  // SSE over POST: the EventSource API only supports GET, so we read the
-  // streaming response body manually with fetch + ReadableStream.
-  const res = await fetch(`${BASE}/agents/${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ context_id, history }),
-    signal: controller.signal,
-  });
-  if (!res.ok || !res.body) {
-    onError(`agent stream failed: HTTP ${res.status}`);
-    return controller;
-  }
+/** A tool the agent invoked (assistant turn) — surfaced as a chip. */
+export interface AssistantToolCall {
+  tool_use_id: string;
+  name: string;
+  input: Record<string, unknown>;
+  /** True for state-changing tools (run_build, extend_profile, …). */
+  mutating?: boolean;
+}
 
+/** Selected fields lifted out of a tool result for inline rendering
+ *  (e.g. a build's watch link) — present on streaming tool_result
+ *  events for mutating tools. */
+export interface AssistantToolResultDetail {
+  message?: string;
+  watch_url?: string;
+  pipeline_id?: string;
+  plan_id?: string;
+  profile_id?: string;
+  status?: string;
+  phase?: string;
+  summary?: string;
+}
+
+/** A tool result fed back to the agent (tool turn). */
+export interface AssistantToolResult {
+  tool_use_id: string;
+  /** Full content sent to Claude (present on persisted turns). */
+  content?: string;
+  summary?: string;
+  is_error: boolean;
+  detail?: AssistantToolResultDetail;
+}
+
+/** One persisted turn. Mirrors the backend AssistantTurnDTO. */
+export interface AssistantTurn {
+  turn_id: number;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls: AssistantToolCall[] | null;
+  tool_results: AssistantToolResult[] | null;
+  context_scope: AssistantContextScope | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  created_at: string;
+}
+
+/** Full conversation with its turns. */
+export interface AssistantConversation {
+  conversation_id: number;
+  actor: string;
+  title: string | null;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+  last_message_at: string | null;
+  turns: AssistantTurn[];
+}
+
+/** Slim shape for the conversation picker. */
+export interface AssistantConversationSummary {
+  conversation_id: number;
+  title: string | null;
+  status: "active" | "archived";
+  created_at: string;
+  last_message_at: string | null;
+}
+
+export const listConversations = (
+  params?: { status?: "active" | "archived"; limit?: number },
+) => {
+  const q = new URLSearchParams();
+  if (params?.status) q.set("status", params.status);
+  if (params?.limit !== undefined) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return request<AssistantConversationSummary[]>(
+    `/agents/clarion/conversations${qs ? "?" + qs : ""}`,
+  );
+};
+
+export const getConversation = (id: number) =>
+  request<AssistantConversation>(`/agents/clarion/conversations/${id}`);
+
+export const archiveConversation = (id: number) =>
+  request<void>(`/agents/clarion/conversations/${id}/archive`, { method: "POST" });
+
+/** A build the assistant wants to run, paused awaiting the SE's approval
+ *  (only emitted when auto_approve is off). */
+export interface AssistantApprovalRequired {
+  conversation_id: number;
+  tool_use_id: string;
+  name: string;
+  input: Record<string, unknown>;
+  message: string;
+}
+
+/** Callbacks for a streaming assistant turn. */
+export interface ClarionChatHandlers {
+  onDelta: (chunk: string) => void;
+  onToolCall: (call: AssistantToolCall) => void;
+  onToolResult: (result: AssistantToolResult) => void;
+  /** A build-kicking tool is paused awaiting approval. */
+  onApprovalRequired?: (a: AssistantApprovalRequired) => void;
+  /** Fires once at the end. `awaiting_approval` is true when the turn
+   *  paused for a build approval instead of completing. */
+  onDone: (info: {
+    conversation_id: number;
+    tokens_in: number | null;
+    tokens_out: number | null;
+    awaiting_approval: boolean;
+  }) => void;
+  onError: (msg: string) => void;
+}
+
+/** Shared SSE frame reader for the assistant's chat + resume streams.
+ *  Server emits: delta, tool_call, tool_result, approval_required, done,
+ *  error. */
+async function consumeClarionStream(res: Response, handlers: ClarionChatHandlers): Promise<void> {
+  if (!res.ok || !res.body) {
+    handlers.onError(`assistant stream failed: HTTP ${res.status}`);
+    return;
+  }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
-
-  (async () => {
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffered += decoder.decode(value, { stream: true });
-        // SSE frames are separated by blank lines. Each frame is a set of
-        // `event: ...` / `data: ...` lines.
-        let idx;
-        while ((idx = buffered.indexOf("\n\n")) >= 0) {
-          const frame = buffered.slice(0, idx);
-          buffered = buffered.slice(idx + 2);
-          let event = "message";
-          let data = "";
-          for (const line of frame.split("\n")) {
-            if (line.startsWith("event: ")) event = line.slice(7).trim();
-            else if (line.startsWith("data: ")) data += line.slice(6);
-          }
-          if (event === "delta") onDelta(data);
-          else if (event === "done") {
-            onDone();
-            return;
-          } else if (event === "error") {
-            onError(data);
-            return;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true }).replace(/\r/g, "");
+      let idx;
+      while ((idx = buffered.indexOf("\n\n")) >= 0) {
+        const frame = buffered.slice(0, idx);
+        buffered = buffered.slice(idx + 2);
+        let event = "message";
+        const dataLines: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith(":")) continue;
+          if (line.startsWith("event:")) {
+            event = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            const rest = line.slice(5);
+            dataLines.push(rest.startsWith(" ") ? rest.slice(1) : rest);
           }
         }
+        const data = dataLines.join("\n");
+        if (event === "delta") {
+          handlers.onDelta(data);
+        } else if (event === "tool_call") {
+          try { handlers.onToolCall(JSON.parse(data)); } catch { /* ignore */ }
+        } else if (event === "tool_result") {
+          try { handlers.onToolResult(JSON.parse(data)); } catch { /* ignore */ }
+        } else if (event === "approval_required") {
+          try { handlers.onApprovalRequired?.(JSON.parse(data)); } catch { /* ignore */ }
+        } else if (event === "done") {
+          try {
+            const parsed = JSON.parse(data);
+            handlers.onDone({
+              conversation_id: parsed.conversation_id,
+              tokens_in: parsed.tokens_in ?? null,
+              tokens_out: parsed.tokens_out ?? null,
+              awaiting_approval: Boolean(parsed.awaiting_approval),
+            });
+          } catch {
+            handlers.onError("malformed done event");
+          }
+          return;
+        } else if (event === "error") {
+          handlers.onError(data);
+          return;
+        }
       }
-      onDone();
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") onError(String(e));
     }
-  })();
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") handlers.onError(String(e));
+  }
+}
 
+/** Send a message to the global Clarion Assistant and stream the reply.
+ *  Returns an AbortController so the caller can cancel mid-stream.
+ *
+ *  When `conversation_id` is omitted a new thread is created; its id
+ *  comes back on the `done` event. `auto_approve=false` (default) makes
+ *  the agent pause before running a build (emits `approval_required`). */
+export async function streamClarionChat(
+  body: {
+    message: string;
+    conversation_id?: number;
+    context_scope?: AssistantContextScope;
+    auto_approve?: boolean;
+  },
+  handlers: ClarionChatHandlers,
+): Promise<AbortController> {
+  const controller = new AbortController();
+  const res = await fetch(`${BASE}/agents/clarion/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  });
+  void consumeClarionStream(res, handlers);
+  return controller;
+}
+
+/** Resolve a build paused awaiting approval: `approve` runs it, `reject`
+ *  declines it. Streams the continuation with the same handlers. */
+export async function resumeClarionChat(
+  conversationId: number,
+  body: { decision: "approve" | "reject"; auto_approve?: boolean },
+  handlers: ClarionChatHandlers,
+): Promise<AbortController> {
+  const controller = new AbortController();
+  const res = await fetch(`${BASE}/agents/clarion/conversations/${conversationId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  });
+  void consumeClarionStream(res, handlers);
   return controller;
 }

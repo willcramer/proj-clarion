@@ -1,0 +1,83 @@
+# ============================================================
+# Local Alloy test harness for Grafana Cloud DB Observability.
+#
+# What you get:
+#   - Latest stable grafana/alloy
+#   - Reads config.alloy from this directory (mounted read-only)
+#   - Persists the WAL / cursor state across restarts in `alloy_data`
+#     volume so logfile tailing picks up where it left off
+#   - Exposes the Alloy UI at http://localhost:12345 for live debug
+#
+# Usage:
+#   1. Fill in the placeholders in config.alloy (or export the env
+#      vars referenced below and add `env("VAR")` calls in the config).
+#   2. `docker compose up -d`
+#   3. Open http://localhost:12345 — confirm the
+#      `database_observability.postgres` component is `Healthy: true`
+#      and pipes are flowing (Component → Receiver counts climbing).
+#   4. Confirm in Grafana Cloud → Connections → Database Observability
+#      that your instance shows up within ~2 minutes.
+#
+# Local-postgres note:
+#   - macOS / Windows Docker Desktop: leave `DB_HOST=host.docker.internal`
+#     in config.alloy to reach Postgres on the host.
+#   - Linux: add `extra_hosts: ["host.docker.internal:host-gateway"]`
+#     to this service (already done below), OR run with
+#     `--network host` and use `DB_HOST=127.0.0.1`.
+# ============================================================
+
+services:
+  alloy:
+    image: grafana/alloy:latest
+    container_name: dbobs-alloy
+    restart: unless-stopped
+
+    # Default Alloy entrypoint already runs `alloy run` with the config
+    # path; override only to enable the UI listener + storage path.
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+
+    ports:
+      # Alloy debug UI — useful in dev; firewall it in prod.
+      - "127.0.0.1:12345:12345"
+
+    volumes:
+      # The config you edit on the host, mounted RO so a stray
+      # `alloy reload` can't rewrite it.
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+
+      # Persistent WAL / file-position cursors. Without this, a restart
+      # re-tails the entire postgresql.log from byte 0 — duplicate
+      # log lines in Loki + busted dedup.
+      - alloy_data:/var/lib/alloy/data
+
+      # If Alloy and Postgres are on the SAME host and you want to
+      # tail the host's log directory, uncomment + adjust:
+      # - /var/log/postgresql:/var/log/postgresql:ro
+
+    # Linux: reach host services via host.docker.internal. macOS/Windows
+    # have this name baked in; on Linux it needs the gateway hint.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Optional: env-var-driven credentials. If you've replaced the
+    # placeholders in config.alloy with env("…") calls, set them here:
+    # environment:
+    #   GRAFANA_CLOUD_PROM_USERNAME: "${GRAFANA_CLOUD_PROM_USERNAME}"
+    #   GRAFANA_CLOUD_LOKI_USERNAME: "${GRAFANA_CLOUD_LOKI_USERNAME}"
+    #   GRAFANA_CLOUD_API_TOKEN:     "${GRAFANA_CLOUD_API_TOKEN}"
+    #   DB_PASSWORD:                 "${DB_PASSWORD}"
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:12345/-/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 10s
+
+volumes:
+  alloy_data:
+    name: dbobs-alloy-data

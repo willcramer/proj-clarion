@@ -25,7 +25,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Plus, Square, Loader2 } from "lucide-react";
+import { ChevronRight, Plus, Square, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/Button";
 import {
@@ -63,18 +63,40 @@ export function LiveDemoCard() {
       className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] p-6 flex flex-col gap-4"
     >
       <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-[var(--color-text)]">
-            {headline ? "Active demo" : "No active demo"}
-          </p>
-          <p className="text-xs text-[var(--color-text-muted)] truncate mt-1">
-            {headline
-              ? `${friendlyTitle(headline)} · ${headline.plan_id.slice(0, 6)}`
-              : "Start one from a plan to begin streaming live telemetry."}
-          </p>
-        </div>
+        {/* When a session is active the whole headline becomes a link
+            to the plan detail page so the SE can drill into the page
+            where the demo's actually running (and where Start/Stop +
+            telemetry panels live). The clickable region covers title
+            + subtitle so the click target is forgiving. When nothing's
+            live, the same block is a non-interactive empty state. */}
+        {headline ? (
+          <Link
+            to={`/plans/${headline.plan_id}`}
+            className="group min-w-0 flex-1 -m-1 p-1 rounded-md hover:bg-white/[0.02] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40"
+            title={`Open plan ${headline.plan_id.slice(0, 8)} — where this demo is running`}
+          >
+            <p className="text-sm font-medium text-[var(--color-text)] inline-flex items-center gap-1.5">
+              Active demo
+              <ChevronRight
+                size={12}
+                aria-hidden="true"
+                className="text-[var(--color-text-faint)] opacity-0 -translate-x-0.5 group-hover:opacity-100 group-hover:translate-x-0 transition-[opacity,transform] duration-150"
+              />
+            </p>
+            <p className="text-xs text-[var(--color-text-muted)] truncate mt-1 group-hover:text-[var(--color-text)] transition-colors">
+              {friendlyTitle(headline)} · {headline.plan_id.slice(0, 6)}
+            </p>
+          </Link>
+        ) : (
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-[var(--color-text)]">No active demo</p>
+            <p className="text-xs text-[var(--color-text-muted)] truncate mt-1">
+              Start one from a plan to begin streaming live telemetry.
+            </p>
+          </div>
+        )}
         {headline && (
-          <span className="inline-flex items-center gap-1.5 px-2 h-6 rounded-md font-mono text-[10px] uppercase tracking-wider text-[var(--color-live)] bg-[var(--color-live-bg)] border border-[color:var(--color-live)]/30">
+          <span className="inline-flex items-center gap-1.5 px-2 h-6 rounded-md font-mono text-[10px] uppercase tracking-wider text-[var(--color-live)] bg-[var(--color-live-bg)] border border-[color:var(--color-live)]/30 shrink-0">
             <span
               className="inline-block w-1.5 h-1.5 rounded-full"
               style={{ background: "var(--color-live)" }}

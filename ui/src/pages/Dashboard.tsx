@@ -8,8 +8,8 @@
  *     ├ HeroBuildCard, URL + preset chips → /new
  *     └ LiveDemoCard, active emitter sessions, Extend/Stop
  *   OrphanCleanup, auto-hidden when nothing's orphaned
- *   4 KpiCards, Plans · Profiles · Events · KG nodes
- *   DrilldownPanel, Plans-by-state or KG breakdown
+ *   4 KpiCards, Plans · Profiles · Events · KG nodes — each links to
+ *     its canonical list page (Plans → /plans, etc.)
  *   Demo library, card grid of researched companies (drill into a plan)
  *
  * Active pipeline state lives in the topbar (PipelineStatusPill), not
@@ -27,21 +27,21 @@ import { useNavigate } from "react-router-dom";
 import {
   ScrollText, ClipboardList, Network, Database, AlertCircle, ChevronRight,
   Sparkles, Trash2, ExternalLink, Loader2, AlertTriangle,
+  History, Info, Terminal,
 } from "lucide-react";
+import { type ComponentType } from "react";
 
 import {
   getDashboardSummary, listPlans, listProfiles, listOrphanFolders,
   deleteOrphanFolder,
-  type OrphanFolder, type PlanSummary, type ProfileSummary,
+  type OrphanFolder, type PlanSummary,
 } from "@/lib/api";
-import { Badge, reviewStateTone } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
-import { DrilldownPanel } from "@/components/DrilldownPanel";
 import { HeroBuildCard, type BuildPreset } from "@/components/HeroBuildCard";
 import { KpiCard } from "@/components/KpiCard";
 import { LiveDemoCard } from "@/components/LiveDemoCard";
-import { cn } from "@/lib/cn";
+import { ProfileKpiCard } from "@/components/ProfileKpiCard";
 import { usePipeline } from "@/lib/PipelineContext";
 
 export function DashboardPage() {
@@ -50,10 +50,6 @@ export function DashboardPage() {
   const navigate = useNavigate();
 
   const s = summary.data;
-
-  const [drilldown, setDrilldown] = useState<null | "plans-by-state" | "kg">(null);
-  const toggle = (k: "plans-by-state" | "kg") =>
-    setDrilldown((cur) => (cur === k ? null : k));
 
   /** Start a pipeline directly from the dashboard hero, no /new bounce.
    *  The PipelineContext attaches its own SSE stream, so once `start` resolves
@@ -106,9 +102,13 @@ export function DashboardPage() {
           continuing the demo. */}
       <OrphanCleanup />
 
-      {/* 4-tile status strip per v1 design: Plans → Profiles → Events
-          → KG nodes. Plans and KG nodes remain interactive (drilldown
-          for state breakdown + node/edge details respectively). */}
+      {/* 4-tile status strip. Each tile is a link to its canonical
+          list page — Plans / Profiles → their list; Events → /audit
+          where the demo-session + event history surfaces; KG nodes →
+          /plans since KGs live inside plans. v1's drilldown panels
+          (Plans by review-state, KG node/edge breakdown) were dropped
+          because their value was just setting a URL filter that the
+          destination pages already accept directly. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={ClipboardList}
@@ -120,13 +120,7 @@ export function DashboardPage() {
               ? `${Object.keys(s.plans_by_state).length} states`
               : undefined
           }
-          onClick={
-            s && Object.keys(s.plans_by_state).length > 0
-              ? () => toggle("plans-by-state")
-              : undefined
-          }
-          selected={drilldown === "plans-by-state"}
-          controlsId="dash-drill-plans-by-state"
+          onClick={() => navigate("/plans")}
         />
         <KpiCard
           icon={ScrollText}
@@ -134,6 +128,7 @@ export function DashboardPage() {
           value={fmtNum(s?.profiles_total)}
           tone="info"
           hint="researched companies"
+          onClick={() => navigate("/profiles")}
         />
         <KpiCard
           icon={Database}
@@ -141,6 +136,7 @@ export function DashboardPage() {
           value={fmtNum(s?.business_events_total)}
           tone="success"
           hint="business events stored"
+          onClick={() => navigate("/audit")}
         />
         <KpiCard
           icon={Network}
@@ -148,64 +144,96 @@ export function DashboardPage() {
           value={fmtNum(s?.kg_nodes_total)}
           tone="info"
           hint={s ? `${fmtNum(s.kg_edges_total)} edges` : undefined}
-          onClick={s ? () => toggle("kg") : undefined}
-          selected={drilldown === "kg"}
-          controlsId="dash-drill-kg"
+          onClick={() => navigate("/plans")}
         />
       </div>
 
-      <DrilldownPanel
-        id="dash-drill-plans-by-state"
-        open={drilldown === "plans-by-state"}
-        onClose={() => setDrilldown(null)}
-        title={`Plans by review state · ${Object.values(s?.plans_by_state ?? {}).reduce((a, b) => a + b, 0)} total`}
-        subtitle="Click a state to filter the Plans page"
-      >
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(s?.plans_by_state ?? {})
-            .sort((a, b) => b[1] - a[1])
-            .map(([state, count]) => (
-              <button
-                key={state}
-                type="button"
-                onClick={() => navigate(`/plans?state=${encodeURIComponent(state)}`)}
-                className="rounded-md hover:opacity-80 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
-              >
-                <Badge tone={reviewStateTone(state)}>
-                  {state}{" "}
-                  <span className="ml-1 text-[10px] opacity-70 font-mono">{count}</span>
-                </Badge>
-              </button>
-            ))}
-        </div>
-      </DrilldownPanel>
-
-      <DrilldownPanel
-        id="dash-drill-kg"
-        open={drilldown === "kg"}
-        onClose={() => setDrilldown(null)}
-        title="Knowledge Graph"
-        subtitle={s ? `${fmtNum(s.kg_nodes_total)} nodes across ${fmtNum(s.kg_edges_total)} edges` : ""}
-      >
-        <dl className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <dt className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">Nodes</dt>
-            <dd className="text-xl font-semibold tabular-nums">{fmtNum(s?.kg_nodes_total)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">Edges</dt>
-            <dd className="text-xl font-semibold tabular-nums">{fmtNum(s?.kg_edges_total)}</dd>
-          </div>
-          <div className="col-span-2 text-xs text-[var(--color-text-faint)] mt-1">
-            The KG is the spine that ties the business tier (account, business unit,
-            region, brand) to the tech tier (cluster, node, pod, service, database).
-            Open a plan to see its full graph in the Plans detail view.
-          </div>
-        </dl>
-      </DrilldownPanel>
-
       <DemoLibrary />
+
+      <SectionsGrid />
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// SectionsGrid, the "jump to" footer row on the dashboard.
+//
+// Every top-level route gets a small link card here: Profiles · Plans
+// · Builds · Runs · Audit · About. The topbar already has nav links
+// for these, but the dashboard is where someone returns between
+// sessions and wants a discoverable surface for "where do I look for
+// X?". The cards stay quiet — small icon + label + one-line hint +
+// reveal chevron — so they don't compete with the Demo library above.
+// ──────────────────────────────────────────────────────────────────
+
+interface SectionLink {
+  to: string;
+  label: string;
+  hint: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
+}
+
+// Topbar nav already has Builds / Profiles / Plans, so the Jump-to
+// row only surfaces routes that aren't otherwise visible. Keeps the
+// home page from duplicating itself.
+const SECTIONS: SectionLink[] = [
+  { to: "/runs",  label: "Runs",  hint: "Runner tasks + logs",       icon: Terminal },
+  { to: "/audit", label: "Audit", hint: "Plan + profile + demo log", icon: History },
+  { to: "/about", label: "About", hint: "Architecture + pipeline",   icon: Info },
+];
+
+function SectionsGrid() {
+  const navigate = useNavigate();
+  return (
+    <section aria-label="Jump to section">
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+          Jump to
+        </h2>
+      </div>
+      <div className="grid gap-2.5 sm:grid-cols-2 md:grid-cols-3">
+        {SECTIONS.map(({ to, label, hint, icon: Icon }) => (
+          <button
+            key={to}
+            type="button"
+            onClick={() => navigate(to)}
+            className={
+              // Quieter than KPI tiles: no accent gradient, no bottom
+              // bar. Just a clean tile with a smooth hover lift + icon
+              // tint shift so each one signals "click me" without
+              // shouting.
+              "group relative isolate text-left rounded-xl border " +
+              "border-[var(--color-border)] bg-[var(--color-canvas-elev1)] " +
+              "p-3 flex items-center gap-3 shadow-[var(--shadow-sm)] " +
+              "transition-[transform,box-shadow,border-color] duration-150 ease-out " +
+              "hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-md)] " +
+              "focus-visible:outline-none focus-visible:border-[var(--color-accent-border)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/40 " +
+              "cursor-pointer"
+            }
+          >
+            <span
+              aria-hidden="true"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg shrink-0 bg-[var(--color-canvas-elev2)] border border-[var(--color-border)] text-[var(--color-text-muted)] group-hover:text-[var(--color-accent)] group-hover:border-[color:var(--color-accent-border)] group-hover:bg-[var(--color-accent-bg)] transition-colors"
+            >
+              <Icon size={16} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-[var(--color-text)] truncate">
+                {label}
+              </div>
+              <div className="text-[11px] text-[var(--color-text-faint)] truncate">
+                {hint}
+              </div>
+            </div>
+            <ChevronRight
+              size={14}
+              aria-hidden="true"
+              className="shrink-0 text-[var(--color-text-faint)] opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-[opacity,transform] duration-150 ease-out"
+            />
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -291,7 +319,7 @@ function DemoLibrary() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {visible.map((p) => (
-            <DemoCard
+            <ProfileKpiCard
               key={p.profile_id}
               profile={p}
               plans={plansByProfile.get(p.profile_id) ?? []}
@@ -310,133 +338,10 @@ function DemoLibrary() {
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
-// DemoCard, one card per researched company
-// ──────────────────────────────────────────────────────────────────
-
-function DemoCard({
-  profile, plans, onClick,
-}: {
-  profile: ProfileSummary;
-  plans: PlanSummary[];
-  onClick: () => void;
-}) {
-  const status = deriveDemoStatus(profile, plans);
-  const host = hostOf(profile.primary_url);
-  const initial = (profile.company_name || host || "?").trim()[0]?.toUpperCase() ?? "?";
-
-  // Stats row, cheap signals scanned at a glance. We surface the most
-  // SE-meaningful: pain signals (what hurts), tech (what they run), and
-  // plan count (demo variants prepared).
-  const stats: { label: string; value: number | string }[] = [
-    { label: "Pain",  value: profile.pain_signal_count },
-    { label: "Tech",  value: profile.tech_signal_count },
-    { label: "Plans", value: plans.length },
-  ];
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "text-left rounded-xl border p-4 transition-all group",
-        "bg-[var(--color-canvas-elev1)] border-[var(--color-border)]",
-        "hover:border-[color:var(--color-accent-border)] hover:bg-[var(--color-canvas-elev2)]/60",
-        "focus-visible:border-[color:var(--color-accent-border)]",
-      )}
-    >
-      <div className="flex items-start gap-3">
-        {/* Initial bubble, gives each card a memorable visual handle
-            without needing per-company logos. Tone tracks readiness. */}
-        <span
-          aria-hidden="true"
-          className={cn(
-            "inline-flex items-center justify-center w-10 h-10 rounded-lg shrink-0",
-            "font-semibold text-sm",
-            status.tone === "ready"      && "bg-[var(--color-success-bg)] text-[var(--color-success)] border border-[color:var(--color-success)]/30",
-            status.tone === "in-review"  && "bg-[var(--color-accent-bg)] text-[var(--color-accent)] border border-[color:var(--color-accent-border)]",
-            status.tone === "draft"      && "bg-[var(--color-canvas-elev2)] text-[var(--color-text-muted)] border border-[var(--color-border)]",
-            status.tone === "researching" && "bg-[var(--color-info-bg)] text-[var(--color-info)] border border-[color:var(--color-info)]/30",
-          )}
-        >
-          {status.tone === "researching"
-            ? <Loader2 size={16} className="animate-spin" />
-            : initial}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-[var(--color-text)] truncate">
-            {profile.company_name ?? host ?? "Untitled profile"}
-          </div>
-          <div className="text-[11px] text-[var(--color-text-faint)] font-mono truncate mt-0.5">
-            {host}
-          </div>
-        </div>
-        <ChevronRight
-          size={14}
-          aria-hidden="true"
-          className="shrink-0 text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 transition-opacity"
-        />
-      </div>
-
-      {/* Status pill + stats */}
-      <div className="mt-3 flex items-center gap-2 flex-wrap">
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 h-6 px-2 rounded-full text-[10px] font-mono uppercase tracking-wider border",
-            status.tone === "ready"      && "border-[color:var(--color-success)]/40 bg-[var(--color-success-bg)] text-[var(--color-success)]",
-            status.tone === "in-review"  && "border-[color:var(--color-accent-border)] bg-[var(--color-accent-bg)] text-[var(--color-accent)]",
-            status.tone === "draft"      && "border-[var(--color-border)] bg-[var(--color-canvas)]/40 text-[var(--color-text-muted)]",
-            status.tone === "researching" && "border-[color:var(--color-info)]/40 bg-[var(--color-info-bg)] text-[var(--color-info)]",
-          )}
-        >
-          {status.label}
-        </span>
-        <span className="text-[11px] text-[var(--color-text-faint)] tabular-nums">
-          {formatRelative(profile.created_at)}
-        </span>
-      </div>
-
-      <div className="mt-3 pt-3 border-t border-[var(--color-border)] grid grid-cols-3 gap-2 text-center">
-        {stats.map((s) => (
-          <div key={s.label}>
-            <div className="text-base font-medium tabular-nums text-[var(--color-text)]">
-              {s.value}
-            </div>
-            <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-faint)] mt-0.5">
-              {s.label}
-            </div>
-          </div>
-        ))}
-      </div>
-    </button>
-  );
-}
-
-/** Derive a single demo-readiness status from a profile + its plans.
- *  Priority (most-actionable first):
- *    - "researching", pipeline still running, profile not finalized
- *    - "ready", at least one plan is provisioned (live in Cloud)
- *    - "in-review", at least one plan approved or awaiting review
- *    - "draft", profile exists, no usable plan yet
- */
-function deriveDemoStatus(
-  p: ProfileSummary,
-  plans: PlanSummary[],
-): { tone: "ready" | "in-review" | "draft" | "researching"; label: string } {
-  if (p.pending) return { tone: "researching", label: "Researching" };
-  const states = new Set(plans.map((pl) => pl.review_state));
-  if (states.has("provisioned"))            return { tone: "ready", label: "Ready to demo" };
-  if (states.has("approved_for_provision")) return { tone: "ready", label: "Approved" };
-  if (states.has("se_reviewed"))            return { tone: "in-review", label: "In review" };
-  if (plans.length > 0)                     return { tone: "in-review", label: "Drafted plan" };
-  return { tone: "draft", label: "Just researched" };
-}
-
-function hostOf(url: string | null): string {
-  if (!url) return "—";
-  try { return new URL(url).host.replace(/^www\./, ""); }
-  catch { return url; }
-}
+// The card component itself + its tone palette + status derivation +
+// host parsing live in @/components/ProfileKpiCard so the Profiles list
+// page can render the same tile. One source of truth for the visual
+// language.
 
 // ──────────────────────────────────────────────────────────────────
 // OrphanCleanup, unchanged from v1, only shows when there's
@@ -571,17 +476,4 @@ function fmtNum(n: number | string | undefined): string {
   if (n === undefined) return "…";
   if (typeof n === "string") return n;
   return n.toLocaleString();
-}
-
-function formatRelative(iso: string): string {
-  const d = new Date(iso);
-  const diffMs = Date.now() - d.getTime();
-  const sec = Math.round(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.round(hr / 24);
-  return `${day}d ago`;
 }

@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
 import { useMemo, useState } from "react";
 import {
-  ArrowLeft, Check, AlertCircle, Play, Trash2, MessageCircle, Code2,
+  ArrowLeft, Check, AlertCircle, Play, Trash2, Code2,
   Stethoscope, CheckCircle2, XCircle, AlertTriangle, MinusCircle, Loader2,
   Sparkles, Activity, ChevronDown, ChevronRight, FileDown,
-  ScrollText, Hammer,
+  ScrollText, Hammer, Bot,
 } from "lucide-react";
 
 import {
@@ -19,8 +19,9 @@ import { Badge, reviewStateTone } from "@/components/Badge";
 import { CrumbChip } from "@/components/CrumbChip";
 import { Button } from "@/components/Button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { Tabs } from "@/components/Tabs";
 import { JsonEditor } from "@/components/JsonEditor";
+import { Pagination } from "@/components/Pagination";
+import { PlanKpiCard } from "@/components/PlanKpiCard";
 import { DemoSessionCard } from "@/components/DemoSessionCard";
 import { DemoHistorySection } from "@/pages/Audit";
 import { AuditTrailCard } from "@/components/plan/AuditTrailCard";
@@ -34,7 +35,7 @@ import {
   deriveDashboardsAndAlerts, deriveIncidentStops, deriveProcesses,
   deriveSampleSources, deriveTelemetryShape,
 } from "@/lib/plan-derivations";
-import { AgentChatPanel } from "@/pages/Profiles";
+import { useAssistant } from "@/lib/AssistantContext";
 import { cn } from "@/lib/cn";
 
 // ─── List ──────────────────────────────────────────────────────────
@@ -54,6 +55,34 @@ export function PlansListPage() {
   });
   const navigate = useNavigate();
 
+  // Sort newest-first by updated_at so the highlights surface the
+  // most recently-touched plans (which is what an SE returning to the
+  // page actually cares about).
+  const ordered = useMemo(
+    () => [...(plans.data ?? [])].sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    ),
+    [plans.data],
+  );
+
+  // Hybrid layout — top 6 newest as KPI cards, rest as paginated table.
+  const HIGHLIGHTS_LIMIT = 6;
+  const highlights = ordered.slice(0, HIGHLIGHTS_LIMIT);
+  const showTable = ordered.length > HIGHLIGHTS_LIMIT;
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(ordered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = ordered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  function openPlan(p: typeof ordered[number]) {
+    if (p.pending && p.pipeline_id) {
+      navigate(`/pipelines?p=${p.pipeline_id}`);
+    } else {
+      navigate(`/plans/${p.plan_id}`);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header>
@@ -65,7 +94,10 @@ export function PlansListPage() {
         </h1>
         <p className="text-[var(--color-text-muted)] mt-1 text-sm max-w-2xl">
           DemoPlans the planner produced. Click in to inspect, approve, refine, or
-          start a live demo.
+          start a live demo.{" "}
+          <span className="text-[var(--color-text-faint)] tabular-nums">
+            {ordered.length} total
+          </span>
         </p>
         {profileFilter && (
           <div className="mt-3 inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[var(--color-accent-bg)] border border-[color:var(--color-accent-border)] text-xs">
@@ -88,86 +120,128 @@ export function PlansListPage() {
           </div>
         )}
       </header>
-      <Card>
-        {plans.isLoading ? (
+
+      {plans.isLoading ? (
+        <Card>
           <div className="p-8 text-center text-[var(--color-text-faint)]">Loading…</div>
-        ) : (plans.data ?? []).length === 0 ? (
-          <div className="p-8 text-center text-[var(--color-text-muted)]">No plans yet.</div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider border-b border-[var(--color-border)]">
-              <tr>
-                <th className="text-left font-medium px-4 py-3">Plan</th>
-                <th className="text-left font-medium px-4 py-3">Profile</th>
-                <th className="text-left font-medium px-4 py-3">State</th>
-                <th className="text-right font-medium px-4 py-3">Proc</th>
-                <th className="text-right font-medium px-4 py-3">KG nodes</th>
-                <th className="text-right font-medium px-4 py-3">Alerts</th>
-                <th className="text-right font-medium px-4 py-3">Dashboards</th>
-                <th className="text-right font-medium px-4 py-3">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(plans.data ?? []).map((p) => {
-                const onRowClick = p.pending && p.pipeline_id
-                  ? () => navigate(`/pipelines?p=${p.pipeline_id}`)
-                  : () => navigate(`/plans/${p.plan_id}`);
-                return (
-                  <tr
-                    key={p.plan_id}
-                    onClick={onRowClick}
-                    className={cn(
-                      "border-b border-[var(--color-border)] last:border-0 cursor-pointer transition-colors",
-                      p.pending
-                        ? "bg-[var(--color-info)]/5 hover:bg-[var(--color-info)]/10"
-                        : "hover:bg-white/[0.02]",
-                    )}
-                  >
-                    <td className="px-4 py-3 font-mono text-xs">
-                      {p.pending ? (
-                        <span className="inline-flex items-center gap-1.5 text-[var(--color-info)]">
-                          <Loader2 size={11} className="animate-spin" />
-                          planning…
-                        </span>
-                      ) : (
-                        p.plan_id_short
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">
-                      {/* Plain text on purpose. Clicking a plan row should
-                          land on the plan, full stop; the profile crumb
-                          is reachable from the plan detail page when
-                          needed. Mixing two click targets in one row
-                          made the flow confusing. */}
-                      {p.source_profile_id}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={p.pending ? "info" : reviewStateTone(p.review_state)}>
-                        {p.review_state}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.process_count}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.kg_node_count}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.alert_count}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.dashboard_count}
-                    </td>
-                    <td className="px-4 py-3 text-right text-xs text-[var(--color-text-muted)]">
-                      {new Date(p.updated_at).toLocaleString()}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </Card>
+        </Card>
+      ) : ordered.length === 0 ? (
+        <Card>
+          <div className="p-12 text-center text-[var(--color-text-muted)]">
+            No plans yet.
+          </div>
+        </Card>
+      ) : (
+        <>
+          {/* Highlights — top 6 most-recently-updated plans as KPI tiles. */}
+          <section aria-label="Recent plans">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                Recent
+              </h2>
+              <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                {highlights.length} of {ordered.length}
+              </span>
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {highlights.map((p) => (
+                <PlanKpiCard
+                  key={p.plan_id}
+                  plan={p}
+                  compact
+                  onClick={() => openPlan(p)}
+                />
+              ))}
+            </div>
+          </section>
+
+          {/* Full list — paginated table. Same column shape as the v1
+              table, with the new Status column rendered by Badge tone. */}
+          {showTable && (
+            <section aria-label="All plans">
+              <div className="flex items-baseline justify-between mb-3">
+                <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                  All plans
+                </h2>
+                <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                  {ordered.length} total
+                </span>
+              </div>
+              <Card className="p-0 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider border-b border-[var(--color-border)]">
+                    <tr>
+                      <th className="text-left font-medium px-4 py-3">Plan</th>
+                      <th className="text-left font-medium px-4 py-3">Profile</th>
+                      <th className="text-left font-medium px-4 py-3">State</th>
+                      <th className="text-right font-medium px-4 py-3">Proc</th>
+                      <th className="text-right font-medium px-4 py-3">KG nodes</th>
+                      <th className="text-right font-medium px-4 py-3">Alerts</th>
+                      <th className="text-right font-medium px-4 py-3">Dashboards</th>
+                      <th className="text-right font-medium px-4 py-3">Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((p) => (
+                      <tr
+                        key={p.plan_id}
+                        onClick={() => openPlan(p)}
+                        className={cn(
+                          "border-b border-[var(--color-border)] last:border-0 cursor-pointer transition-colors",
+                          p.pending
+                            ? "bg-[var(--color-info)]/5 hover:bg-[var(--color-info)]/10"
+                            : "hover:bg-white/[0.02]",
+                        )}
+                      >
+                        <td className="px-4 py-3 font-mono text-xs">
+                          {p.pending ? (
+                            <span className="inline-flex items-center gap-1.5 text-[var(--color-info)]">
+                              <Loader2 size={11} className="animate-spin" />
+                              planning…
+                            </span>
+                          ) : (
+                            p.plan_id_short
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">
+                          {p.source_profile_id}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge tone={p.pending ? "info" : reviewStateTone(p.review_state)}>
+                            {p.review_state}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.process_count}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.kg_node_count}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.alert_count}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums">
+                          {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.dashboard_count}
+                        </td>
+                        <td className="px-4 py-3 text-right text-xs text-[var(--color-text-muted)]">
+                          {new Date(p.updated_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <Pagination
+                  page={safePage}
+                  pageSize={pageSize}
+                  total={ordered.length}
+                  onPageChange={setPage}
+                  onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+                />
+              </Card>
+            </section>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -323,100 +397,84 @@ function PlanDetailBody({
         )}
       </div>
 
-      {/* Power-user disclosure. Holds the surfaces that aren't
-          right-clicked daily but the SE needs: composition (raw plan
-          tree), state transitions (approve / tear-down), health
-          diagnostics, demo session history, and the refine column
-          (chat + JSON editor).
-          Audit history was removed from here — it duplicated the
-          Audit tab's AuditTrailCard. The footer ReadyToDemoCta was
-          removed too — Export plan / Start demo already live in the
-          header action bar, so a second copy at the bottom was
-          redundant once tabs collapsed the page to one screen. */}
-      <details className="group">
-        <summary
-          className={cn(
-            "list-none cursor-pointer select-none",
-            "flex items-center gap-2 px-4 py-3 rounded-md border",
-            "bg-[var(--color-canvas-elev1)] border-[var(--color-border)]",
-            "hover:border-[var(--color-border-strong)] transition-colors",
-            "text-sm font-medium text-[var(--color-text)]",
-          )}
-        >
-          <ChevronRight
-            size={14}
-            className="text-[var(--color-text-faint)] transition-transform group-open:rotate-90"
-          />
-          <span className="flex-1">Composition, actions, health &amp; refine</span>
-          <span className="text-[11px] font-mono text-[var(--color-text-faint)]">power user</span>
-        </summary>
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start mt-4">
-          <div className="space-y-5">
-            <PlanTree plan={plan} />
-            <PlanActions planId={plan.plan_id} state={plan.review_state} />
-            <HealthPanel planId={plan.plan_id} />
-            <DemoHistorySection planId={plan.plan_id} />
-          </div>
-          <RefineColumn planId={plan.plan_id} planJson={plan} />
+      {/* Operations — surfaced, no longer buried in a disclosure. The
+          deterministic "act on this plan" controls: approve, build,
+          granular phase runs (PlanActions) beside health diagnostics +
+          demo-session history. The conversational path lives in the
+          Clarion assistant (the "Refine with assistant" button in the
+          header, or ⌘J); these buttons are the explicit equivalents. */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+        <PlanActions planId={plan.plan_id} state={plan.review_state} />
+        <div className="space-y-5">
+          <HealthPanel planId={plan.plan_id} />
+          <DemoHistorySection planId={plan.plan_id} />
         </div>
-      </details>
+      </div>
+
+      {/* Composition — raw plan tree + schema-validated JSON editor.
+          Genuinely power-user (direct structural edits). The chat tab
+          that used to live here is gone: narrative refinement now
+          happens in the assistant, so this is a single-purpose
+          disclosure for hand-editing the plan_json. */}
+      <CompositionPanel plan={plan} />
     </div>
   );
 }
 
 
-/** Right column on Plan detail: tabs between agent chat (narrative
- *  refinement) and a JSON editor (direct schema-validated edits).
- *
- *  Before this component existed, the right column was a single
- *  AgentChatPanel, useful for "what should I change" but read-only.
- *  Now SEs can either talk to the agent OR open the editor and apply
- *  changes themselves. */
-function RefineColumn({
-  planId, planJson,
-}: { planId: string; planJson: unknown }) {
+/** Composition surface on Plan detail: the structural plan tree plus a
+ *  schema-validated JSON editor for direct edits. Collapsed behind a
+ *  disclosure because most refinement now happens conversationally
+ *  through the Clarion assistant ("Refine with assistant" in the header
+ *  / ⌘J); the raw editor is reserved for power users hand-editing the
+ *  plan_json. Saving re-fetches the plan + audit so the tree reflects
+ *  the edit. */
+function CompositionPanel({ plan }: { plan: PlanDoc }) {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<"chat" | "json">("chat");
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
   const saveMut = useMutation({
-    mutationFn: (parsed: unknown) => replacePlanJson(planId, parsed),
+    mutationFn: (parsed: unknown) => replacePlanJson(plan.plan_id, parsed),
     onSuccess: () => {
       setSaveErr(null);
-      // Re-fetch the plan + audit so the tree view reflects the edit
-      qc.invalidateQueries({ queryKey: ["plan", planId] });
+      qc.invalidateQueries({ queryKey: ["plan", plan.plan_id] });
       qc.invalidateQueries({ queryKey: ["plans"] });
-      qc.invalidateQueries({ queryKey: ["plan-audit", planId] });
+      qc.invalidateQueries({ queryKey: ["plan-audit", plan.plan_id] });
     },
     onError: (e: Error) => setSaveErr(e.message),
   });
 
   return (
-    <div className="space-y-3">
-      <Tabs
-        active={tab}
-        onChange={(t) => setTab(t as "chat" | "json")}
-        tabs={[
-          { id: "chat", label: <span className="inline-flex items-center gap-1.5"><MessageCircle size={12} /> Refine via chat</span>, hint: "ask the planner" },
-          { id: "json", label: <span className="inline-flex items-center gap-1.5"><Code2 size={12} /> Edit JSON</span>, hint: "schema-validated save" },
-        ]}
-      />
-      {tab === "chat" ? (
-        <AgentChatPanel
-          contextId={planId}
-          endpoint="plan/refine"
-          title="Refine plan"
-          subtitle="Ask the planner to reconsider a process, alert, or incident. Suggestions are narrative, switch to the JSON tab to apply changes."
+    <details className="group">
+      <summary
+        className={cn(
+          "list-none cursor-pointer select-none",
+          "flex items-center gap-2 px-4 py-3 rounded-md border",
+          "bg-[var(--color-canvas-elev1)] border-[var(--color-border)]",
+          "hover:border-[var(--color-border-strong)] transition-colors",
+          "text-sm font-medium text-[var(--color-text)]",
+        )}
+      >
+        <ChevronRight
+          size={14}
+          className="text-[var(--color-text-faint)] transition-transform group-open:rotate-90"
         />
-      ) : (
+        <span className="flex-1 inline-flex items-center gap-2">
+          <Code2 size={13} className="text-[var(--color-text-faint)]" />
+          Composition — plan tree &amp; JSON
+        </span>
+        <span className="text-[11px] font-mono text-[var(--color-text-faint)]">power user</span>
+      </summary>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start mt-4">
+        <PlanTree plan={plan} />
         <JsonEditor
-          value={planJson}
+          value={plan}
           onSave={async (parsed) => { await saveMut.mutateAsync(parsed); }}
           busy={saveMut.isPending}
           error={saveErr}
         />
-      )}
-    </div>
+      </div>
+    </details>
   );
 }
 
@@ -474,6 +532,7 @@ function BuiltByChip({ planId }: { planId: string }) {
 
 function PlanHeader({ plan }: { plan: PlanDoc }) {
   const t = planTitle(plan.review_state);
+  const assistant = useAssistant();
   const isApproved =
     plan.review_state === "approved_for_provision"
     || plan.review_state === "provisioned";
@@ -531,6 +590,18 @@ function PlanHeader({ plan }: { plan: PlanDoc }) {
           title="Download the plan_json as a file."
         >
           <FileDown size={12} /> Export plan
+        </Button>
+        {/* First-class entry into the Clarion assistant, scoped to this
+            plan. The assistant can refine the plan, re-run pipeline
+            phases, approve, and drive the demo — the conversational
+            counterpart to the deterministic Actions card below. */}
+        <Button
+          variant={isApproved ? "secondary" : "primary"}
+          size="sm"
+          onClick={() => assistant.openAssistant({ scope: { plan_id: plan.plan_id } })}
+          title="Open the Clarion assistant scoped to this plan (⌘J)."
+        >
+          <Bot size={12} /> Refine with assistant
         </Button>
         {isApproved && (
           <Button

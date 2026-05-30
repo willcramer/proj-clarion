@@ -54,9 +54,9 @@ type SubmitIntent = "research_only" | "full_build";
 
 /** Best-effort guess: given what the user typed, return a probable URL.
  *
- *   "starbucks"          -> { url: "https://starbucks.com",          source: "guess" }
- *   "Starbucks Coffee"   -> { url: "https://starbuckscoffee.com",    source: "guess" }
- *   "starbucks.com"      -> { url: "https://starbucks.com",          source: "typed" }
+ *   "grafana"            -> { url: "https://grafana.com",           source: "guess" }
+ *   "Grafana Labs"       -> { url: "https://grafanalabs.com",       source: "guess" }
+ *   "grafana.com"        -> { url: "https://grafana.com",           source: "typed" }
  *   "https://acme.com/x" -> { url: "https://acme.com/x",             source: "typed" }
  *
  * The `source` field tells the UI whether to show a "we guessed this,
@@ -217,7 +217,7 @@ export function AddProfileModal({
                 type="text"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="Starbucks  or  starbucks.com"
+                placeholder="Grafana  or  grafana.com"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 aria-label="Company name or URL"
@@ -259,7 +259,7 @@ export function AddProfileModal({
                 </span>
               ) : (
                 <span className="text-[11px] text-[var(--color-text-faint)]">
-                  Type a name (Starbucks), a domain (starbucks.com), or a full URL.
+                  Type a name (Grafana), a domain (grafana.com), or a full URL.
                 </span>
               )}
             </div>

@@ -1,0 +1,51 @@
+# ============================================================
+# Grafana Cloud Database Observability — postgresql.conf changes
+#
+# Append these lines to /etc/postgresql/<version>/main/postgresql.conf
+# (or whichever conf file your installation uses). Don't replace the
+# whole file — there are server-tuning values you already care about.
+#
+# REQUIRES a Postgres restart to pick up shared_preload_libraries.
+# The other settings can be SET via ALTER SYSTEM + pg_reload_conf()
+# if a restart isn't immediately practical, but you still need the
+# preload + restart at least once.
+# ============================================================
+
+# pg_stat_statements is mandatory for Grafana DB Obs's query insights —
+# without it you get host/connection metrics only, no per-query telemetry.
+shared_preload_libraries = 'pg_stat_statements'
+
+# Track every statement, normalised. The other valid values are 'top'
+# (default — only top-level statements, no nested) and 'none' (disabled).
+# 'all' is what the Grafana docs recommend for full insights.
+pg_stat_statements.track = all
+
+# Cap the per-query buffer. 10k is enough for most workloads; bump to
+# 50k if you have very wide queries (lots of placeholder permutations).
+pg_stat_statements.max = 10000
+
+# Persist the buffer across restarts so the first 10-15 min of stats
+# after a restart aren't lost.
+pg_stat_statements.save = on
+
+# These three sharpen the data Grafana sees. track_io_timing is the
+# most valuable — without it I/O times in pg_stat_statements stay zero.
+# Each has a small but real CPU cost; safe on every PG 14+ deployment
+# the Grafana docs recommend turning on.
+track_io_timing       = on
+track_activities      = on
+track_counts          = on
+
+# Optional: also surface plan timings for the slow-query EXPLAIN feature.
+# Comment back in if you want EXPLAIN plans in the Grafana panel.
+# auto_explain.log_min_duration = 1000  # ms — only slow queries
+# auto_explain.log_analyze      = on
+# auto_explain.log_buffers      = on
+
+# ============================================================
+# Apply
+# ============================================================
+#   sudo systemctl restart postgresql
+#   # OR for a managed install:
+#   pg_ctl -D <data-dir> restart -m fast
+# ============================================================

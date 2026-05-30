@@ -234,6 +234,44 @@ class RedEmitter:
                 "clarion_database_id":  dst.node_id,
             })
 
+        # Manufacturing plant OEE feeders. Any business_unit node whose
+        # node_id starts with `bu-plant-` (planner convention for
+        # b2b_industrial archetype) or carries a `latitude` attribute
+        # (newer convention) gets per-line OEE feeder observations.
+        # OEE = Availability × Performance × Quality — each emitted as
+        # its own gauge so dashboards can plot the three components
+        # separately AND multiply them in PromQL for the headline KPI.
+        # Per-plant baseline + per-line jitter so plants visibly differ
+        # in the demo (St. Paul 92% OEE, Nanjing 88%, etc.).
+        rng_plant = random.Random(hash((plan_id, "oee")) & 0xFFFFFFFF)
+        self._plant_emitters: list[dict[str, Any]] = []
+        for n in kg.nodes:
+            is_plant = (
+                n.business_subtype == "business_unit"
+                and (n.node_id.startswith("bu-plant-")
+                     or n.attributes.get("latitude") is not None)
+            )
+            if not is_plant:
+                continue
+            try:
+                lines = int(n.attributes.get("production_lines") or 3)
+            except (TypeError, ValueError):
+                lines = 3
+            # Each plant gets a baseline OEE in a credible 80-95% band.
+            avail_base = rng_plant.uniform(0.88, 0.97)
+            perf_base  = rng_plant.uniform(0.85, 0.95)
+            qual_base  = rng_plant.uniform(0.93, 0.99)
+            for line_idx in range(1, lines + 1):
+                self._plant_emitters.append({
+                    "plant_id":     n.node_id,
+                    "plant":        n.node_id.removeprefix("bu-plant-"),
+                    "line":         f"line-{line_idx:02d}",
+                    "shift":        "day",  # single shift for demo simplicity
+                    "avail_base":   avail_base + rng_plant.uniform(-0.03, 0.02),
+                    "perf_base":    perf_base  + rng_plant.uniform(-0.05, 0.03),
+                    "qual_base":    qual_base  + rng_plant.uniform(-0.02, 0.01),
+                })
+
         # k8s node entities — emit `kube_node_info` so the custom KubeCluster
         # entity rule fires (it queries `kube_node_info{cluster!=""}`). The
         # `kind` attribute may be either "node" (legacy) or "kubenode" (after
@@ -249,6 +287,80 @@ class RedEmitter:
                 "node":    n.node_id,
                 "cluster": cluster,
             })
+
+        # ─────────────────────────────────────────────────────────────
+        # SAP-flavored feeders for B2B-industrial demos (e.g. chemicals, mfg)
+        # ─────────────────────────────────────────────────────────────
+        # HANA tenant DBs. We map each tenant DB to one of the existing
+        # database business entities so cross-tier joins keep working
+        # (Service USES Database relation, etc.). Naming follows SAP
+        # convention: <SID>_<env>, e.g. HF1_PROD.
+        rng_hana = random.Random(hash((plan_id, "hana")) & 0xFFFFFFFF)
+        databases = [n for n in kg.nodes
+                     if n.attributes.get("kind") == "database"
+                     or n.technical_subtype == "database"]
+        hana_tenant_map = [
+            ("HF1_PROD",  "S/4HANA ERP production tenant"),
+            ("BWP_PROD",  "BW/4HANA warehouse tenant"),
+            ("HDB_QM",    "HANA QM tenant"),
+            ("HDB_MES",   "HANA MES/historian tenant"),
+        ]
+        self._hana_tenants: list[dict[str, Any]] = []
+        for i, (tenant, _desc) in enumerate(hana_tenant_map):
+            db_node = databases[i % len(databases)] if databases else None
+            self._hana_tenants.append({
+                "tenant_db":           tenant,
+                "clarion_database_id": db_node.node_id if db_node else "",
+                # Baselines that bracket realistic HANA Cockpit numbers
+                "sessions_base":       rng_hana.uniform(40, 160),
+                "memory_gb_base":      rng_hana.uniform(18, 48),
+                "cpu_pct_base":        rng_hana.uniform(32, 65),
+                "savepoint_s_base":    rng_hana.uniform(0.6, 2.4),
+            })
+
+        # SAP QM (Quality Management) feeders — per plant, drives the
+        # quality notifications + batch-release-backlog story. Each plant
+        # gets a baseline notification rate and pending-release count.
+        rng_qm = random.Random(hash((plan_id, "qm")) & 0xFFFFFFFF)
+        self._qm_emitters: list[dict[str, Any]] = []
+        for n in kg.nodes:
+            is_plant = (
+                n.business_subtype == "business_unit"
+                and (n.node_id.startswith("bu-plant-")
+                     or n.attributes.get("latitude") is not None)
+            )
+            if not is_plant:
+                continue
+            self._qm_emitters.append({
+                "plant":                  n.node_id.removeprefix("bu-plant-"),
+                "plant_id":               n.node_id,
+                "notif_per_hour":         rng_qm.uniform(0.4, 2.5),
+                "batch_release_pending":  rng_qm.randint(2, 18),
+                "inspect_pass_per_hour":  rng_qm.uniform(20, 60),
+                "inspect_fail_per_hour":  rng_qm.uniform(0.5, 4.0),
+            })
+
+        # SAP SD (Sales & Distribution) OTIF feeder — On-Time-In-Full
+        # computed the way SAP shops actually compute it: ratio of
+        # deliveries that hit promise-date in full vs total deliveries.
+        # Baseline 0.88-0.95 per (region, plant). HTTP-2xx-ratio is a
+        # storytelling proxy; this is the real one.
+        rng_sd = random.Random(hash((plan_id, "sd")) & 0xFFFFFFFF)
+        regions = sorted({(n.attributes.get("_clarion_parents") or {}).get("region", "")
+                          for n in kg.nodes if n.business_subtype == "business_unit"
+                          and (n.attributes.get("_clarion_parents") or {}).get("region")})
+        if not regions:
+            regions = ["worldwide"]
+        self._sd_pairs: list[dict[str, Any]] = []
+        for plant_emit in self._plant_emitters[::3]:  # 1 row per plant (lines share OTIF)
+            for region in regions:
+                self._sd_pairs.append({
+                    "region":        region.removeprefix("region-") or region,
+                    "plant":         plant_emit["plant"],
+                    "plant_id":      plant_emit["plant_id"],
+                    "otif_base":     rng_sd.uniform(0.88, 0.96),
+                    "orders_in_flight_base": rng_sd.randint(40, 220),
+                })
 
     @staticmethod
     def _namespace_for(svc: KGNode) -> str:
@@ -349,6 +461,87 @@ class RedEmitter:
             description="Synthetic kube_node_info so built-in KubeCluster entity fires",
             callbacks=[self._emit_kube_node_info],
         )
+        # OEE feeders — three components emitted separately. Dashboard
+        # panels can chart them individually, plot the headline
+        # `availability * performance * quality` OEE in PromQL, or roll
+        # up to plant level via avg-by-plant. Only registered when the
+        # plan has plant entities; for retail / SaaS / healthcare
+        # archetypes `self._plant_emitters` is empty and the callbacks
+        # return [] with negligible cost.
+        if self._plant_emitters:
+            meter.create_observable_gauge(
+                "clarion_plant_availability_ratio",
+                description="OEE Availability component (uptime ÷ planned production time)",
+                callbacks=[self._emit_plant_availability],
+            )
+            meter.create_observable_gauge(
+                "clarion_plant_performance_ratio",
+                description="OEE Performance component (actual ÷ ideal cycle rate)",
+                callbacks=[self._emit_plant_performance],
+            )
+            meter.create_observable_gauge(
+                "clarion_plant_quality_ratio",
+                description="OEE Quality component (good units ÷ total units)",
+                callbacks=[self._emit_plant_quality],
+            )
+
+        # HANA Cockpit-flavored tenant DB metrics. Shape mirrors what
+        # HANA's M_SERVICE_STATISTICS / M_MEMORY views surface, so an
+        # SAP Basis admin reads it without translation.
+        if self._hana_tenants:
+            meter.create_observable_gauge(
+                "hana_active_sessions",
+                description="HANA active session count per tenant DB (mirrors M_SESSIONS row count)",
+                callbacks=[self._emit_hana_sessions],
+            )
+            meter.create_observable_gauge(
+                "hana_memory_used_gb",
+                description="HANA resident memory per tenant DB (M_HOST_RESOURCE_UTILIZATION.USED_PHYSICAL_MEMORY)",
+                callbacks=[self._emit_hana_memory],
+            )
+            meter.create_observable_gauge(
+                "hana_cpu_used_percent",
+                description="HANA CPU utilization per tenant DB (M_HOST_RESOURCE_UTILIZATION.TOTAL_CPU_USER_TIME)",
+                callbacks=[self._emit_hana_cpu],
+            )
+            meter.create_observable_gauge(
+                "hana_savepoint_duration_seconds",
+                description="HANA savepoint duration per tenant DB (M_SAVEPOINTS.DURATION_SECONDS)",
+                callbacks=[self._emit_hana_savepoint],
+            )
+
+        # SAP QM (Quality Management) feeders. Drives the quality
+        # notifications + batch release backlog story per plant.
+        if self._qm_emitters:
+            meter.create_observable_counter(
+                "sap_qm_quality_notifications_total",
+                description="Cumulative QM quality notifications (QMEL table) by plant + type + priority",
+                callbacks=[self._emit_qm_notifications],
+            )
+            meter.create_observable_gauge(
+                "sap_qm_batch_release_pending",
+                description="QM batch releases pending review per plant (MCHA × QALS view)",
+                callbacks=[self._emit_qm_batch_release_pending],
+            )
+            meter.create_observable_counter(
+                "sap_qm_inspection_lots_total",
+                description="Cumulative QM inspection lot results by plant + outcome (QALS table)",
+                callbacks=[self._emit_qm_inspection_lots],
+            )
+
+        # SAP SD OTIF + open-order feeders. Real OTIF (delivery promise
+        # vs actual on-time-in-full), not an HTTP-2xx proxy.
+        if self._sd_pairs:
+            meter.create_observable_gauge(
+                "sap_sd_otif_ratio",
+                description="Real OTIF ratio per region + plant (LIPS deliveries on-time-in-full)",
+                callbacks=[self._emit_sd_otif],
+            )
+            meter.create_observable_gauge(
+                "sap_sd_orders_in_flight",
+                description="Open sales orders per region + plant (VBAK with status≠C)",
+                callbacks=[self._emit_sd_orders_in_flight],
+            )
 
     # ----- callbacks (cumulative, computed from elapsed time) -----
 
@@ -667,9 +860,16 @@ class RedEmitter:
         )]
 
     def _emit_kube_node_info(self, _options: Any) -> list[Observation]:
+        # `common` merged LAST so customer-scoped asserts_env always wins
+        # over any kn-side key (cluster, etc) that Asserts' kube_* relabel
+        # rules might promote.
         common = self._common_attrs()
         return [
-            Observation(value=1, attributes={**common, **kn})
+            Observation(value=1, attributes={
+                "node":    kn["node"],
+                "cluster": kn["cluster"],
+                **common,
+            })
             for kn in self._kube_nodes
         ]
 
@@ -685,3 +885,259 @@ class RedEmitter:
             )
             for b in self._business_emitters
         ]
+
+    # ----- OEE feeders --------------------------------------------------
+    #
+    # These three callbacks (availability / performance / quality) share
+    # a single helper that produces one observation per (plant, line)
+    # with diurnal breathing, deterministic jitter, and a clamped range.
+    # OEE = availability × performance × quality; we don't emit OEE
+    # directly so dashboards can show the components and the headline
+    # KPI side-by-side (PromQL: avg by (plant) (avail * perf * qual)).
+    #
+    # Values include a slow sinusoidal wobble so the panels animate
+    # visibly during a live demo without needing the incident script to
+    # be armed. The wobble period is intentionally short for a sales
+    # demo (~5 min trough-to-trough) — flip to a longer period before
+    # using these for product screenshots or marketing content.
+
+    def _plant_obs(
+        self,
+        base_key: str,
+        *,
+        wobble_amp: float,
+        floor: float,
+        ceiling: float,
+    ) -> list[Observation]:
+        import math, time as _t
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = _t.time()
+        observations: list[Observation] = []
+        for p in self._plant_emitters:
+            # Slow per-line sine so neighbouring lines don't sync.
+            phase = hash((p["plant_id"], p["line"], base_key)) & 0xFFFF
+            wobble = wobble_amp * math.sin((t + phase) / 60)
+            # Diurnal weight pulls everyone down slightly off-peak so
+            # the dashboard shows daily rhythm rather than a flatline.
+            value = p[base_key] + wobble - (1.0 - weight) * 0.05
+            value = max(floor, min(ceiling, value))
+            observations.append(Observation(
+                value=round(value, 4),
+                attributes={
+                    **common,
+                    "plant":     p["plant"],
+                    "plant_id":  p["plant_id"],
+                    "line":      p["line"],
+                    "shift":     p["shift"],
+                },
+            ))
+        return observations
+
+    def _emit_plant_availability(self, _options: Any) -> list[Observation]:
+        return self._plant_obs("avail_base", wobble_amp=0.02, floor=0.55, ceiling=0.99)
+
+    def _emit_plant_performance(self, _options: Any) -> list[Observation]:
+        return self._plant_obs("perf_base",  wobble_amp=0.03, floor=0.50, ceiling=0.98)
+
+    def _emit_plant_quality(self, _options: Any) -> list[Observation]:
+        return self._plant_obs("qual_base",  wobble_amp=0.01, floor=0.80, ceiling=0.999)
+
+    # ─────────────────────────────────────────────────────────────────
+    # HANA + SAP QM + SD callbacks
+    # ─────────────────────────────────────────────────────────────────
+    def _emit_hana_sessions(self, _options: Any) -> list[Observation]:
+        """Active sessions per HANA tenant DB. Diurnal: peaks midday."""
+        import math
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for h in self._hana_tenants:
+            wobble = 8 * math.sin((t + hash(h["tenant_db"]) % 1000) / 90)
+            val = max(8, h["sessions_base"] * weight + wobble)
+            out.append(Observation(
+                value=int(val),
+                attributes={**common,
+                            "tenant_db":           h["tenant_db"],
+                            "clarion_database_id": h["clarion_database_id"]},
+            ))
+        return out
+
+    def _emit_hana_memory(self, _options: Any) -> list[Observation]:
+        """Resident memory (GB) per tenant. Slowly creeps during workday."""
+        import math
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for h in self._hana_tenants:
+            wobble = 1.2 * math.sin((t + hash(h["tenant_db"]) % 1000) / 220)
+            # Memory grows slightly with load — 60% baseline + 40% load-driven
+            val = h["memory_gb_base"] * (0.6 + 0.4 * weight) + wobble
+            val = max(5.0, val)
+            out.append(Observation(
+                value=round(val, 2),
+                attributes={**common,
+                            "tenant_db":           h["tenant_db"],
+                            "clarion_database_id": h["clarion_database_id"]},
+            ))
+        return out
+
+    def _emit_hana_cpu(self, _options: Any) -> list[Observation]:
+        """CPU % per tenant. Tracks workload closely."""
+        import math
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for h in self._hana_tenants:
+            wobble = 4 * math.sin((t + hash(h["tenant_db"]) % 1000) / 45)
+            val = h["cpu_pct_base"] * weight + wobble
+            val = max(5.0, min(95.0, val))
+            out.append(Observation(
+                value=round(val, 1),
+                attributes={**common,
+                            "tenant_db":           h["tenant_db"],
+                            "clarion_database_id": h["clarion_database_id"]},
+            ))
+        return out
+
+    def _emit_hana_savepoint(self, _options: Any) -> list[Observation]:
+        """Savepoint write duration (s) per tenant. Spikes under load."""
+        import math
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for h in self._hana_tenants:
+            wobble = 0.4 * math.sin((t + hash(h["tenant_db"]) % 1000) / 30)
+            val = h["savepoint_s_base"] * (0.5 + 0.5 * weight) + wobble
+            val = max(0.2, val)
+            out.append(Observation(
+                value=round(val, 3),
+                attributes={**common,
+                            "tenant_db":           h["tenant_db"],
+                            "clarion_database_id": h["clarion_database_id"]},
+            ))
+        return out
+
+    def _emit_qm_notifications(self, _options: Any) -> list[Observation]:
+        """Cumulative QM notifications per (plant, type, priority).
+        Counter — value = baseline_rate * elapsed_seconds. Diurnal weight
+        modulates rate so dashboards show working-hours pattern."""
+        from datetime import UTC, datetime
+        elapsed = self._elapsed_weighted_seconds()
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        # Distribution of types + priorities — roughly real-world
+        type_pri_dist = [
+            ("customer_complaint",   "1-very_high", 0.05),
+            ("customer_complaint",   "2-high",      0.15),
+            ("internal_quality",     "2-high",      0.30),
+            ("internal_quality",     "3-medium",    0.30),
+            ("supplier_complaint",   "3-medium",    0.15),
+            ("supplier_complaint",   "4-low",       0.05),
+        ]
+        out = []
+        for q in self._qm_emitters:
+            rate_per_sec = (q["notif_per_hour"] * weight) / 3600.0
+            for ntype, prio, share in type_pri_dist:
+                count = int(rate_per_sec * elapsed * share)
+                out.append(Observation(
+                    value=count,
+                    attributes={**common,
+                                "plant":              q["plant"],
+                                "plant_id":           q["plant_id"],
+                                "notification_type":  ntype,
+                                "priority":           prio},
+                ))
+        return out
+
+    def _emit_qm_batch_release_pending(self, _options: Any) -> list[Observation]:
+        """Batch releases pending review per plant. Wobbles ±2 around baseline."""
+        import math
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for q in self._qm_emitters:
+            wobble = int(2 * math.sin((t + hash(q["plant"]) % 1000) / 200))
+            val = max(0, q["batch_release_pending"] + wobble)
+            out.append(Observation(
+                value=val,
+                attributes={**common,
+                            "plant":    q["plant"],
+                            "plant_id": q["plant_id"],
+                            "status":   "awaiting_release"},
+            ))
+        return out
+
+    def _emit_qm_inspection_lots(self, _options: Any) -> list[Observation]:
+        """Cumulative inspection lots per (plant, result). Pass:Fail = ~50:1 ish."""
+        from datetime import UTC, datetime
+        elapsed = self._elapsed_weighted_seconds()
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        out = []
+        for q in self._qm_emitters:
+            pass_per_sec = (q["inspect_pass_per_hour"] * weight) / 3600.0
+            fail_per_sec = (q["inspect_fail_per_hour"] * weight) / 3600.0
+            for result, rate_per_sec in (("passed", pass_per_sec),
+                                         ("failed", fail_per_sec)):
+                out.append(Observation(
+                    value=int(rate_per_sec * elapsed),
+                    attributes={**common,
+                                "plant":    q["plant"],
+                                "plant_id": q["plant_id"],
+                                "result":   result},
+                ))
+        return out
+
+    def _emit_sd_otif(self, _options: Any) -> list[Observation]:
+        """OTIF ratio per (region, plant). Slow wobble + diurnal tilt
+        (slightly worse during peak when carriers are saturated)."""
+        import math
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for p in self._sd_pairs:
+            wobble = 0.012 * math.sin((t + hash((p["region"], p["plant"])) % 1000) / 240)
+            # Peak hours degrade OTIF very slightly (carrier saturation)
+            val = p["otif_base"] + wobble - (1.0 - weight) * (-0.015)
+            val = max(0.70, min(0.999, val))
+            out.append(Observation(
+                value=round(val, 4),
+                attributes={**common,
+                            "region":   p["region"],
+                            "plant":    p["plant"],
+                            "plant_id": p["plant_id"]},
+            ))
+        return out
+
+    def _emit_sd_orders_in_flight(self, _options: Any) -> list[Observation]:
+        """Open sales orders per (region, plant). Builds during the day,
+        drains overnight — sinusoid + diurnal weight."""
+        import math
+        from datetime import UTC, datetime
+        weight = composite_weight(self._diurnal, self._weekly, datetime.now(UTC))
+        common = self._common_attrs()
+        t = time.time()
+        out = []
+        for p in self._sd_pairs:
+            wobble = 14 * math.sin((t + hash((p["region"], p["plant"])) % 1000) / 600)
+            val = max(0, int(p["orders_in_flight_base"] * (0.55 + 0.45 * weight) + wobble))
+            out.append(Observation(
+                value=val,
+                attributes={**common,
+                            "region":   p["region"],
+                            "plant":    p["plant"],
+                            "plant_id": p["plant_id"]},
+            ))
+        return out

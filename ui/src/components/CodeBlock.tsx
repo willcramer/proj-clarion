@@ -75,10 +75,10 @@ export function CodeBlock({
     }
   });
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_WRAP_KEY, wrap ? "1" : "0"); } catch {}
+    try { localStorage.setItem(STORAGE_WRAP_KEY, wrap ? "1" : "0"); } catch { /* localStorage unavailable (private mode/quota); non-fatal */ }
   }, [wrap]);
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_NUMS_KEY, withNumbers ? "1" : "0"); } catch {}
+    try { localStorage.setItem(STORAGE_NUMS_KEY, withNumbers ? "1" : "0"); } catch { /* localStorage unavailable (private mode/quota); non-fatal */ }
   }, [withNumbers]);
 
   const [copied, setCopied] = useState(false);

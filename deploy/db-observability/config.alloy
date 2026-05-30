@@ -1,0 +1,131 @@
+// ============================================================
+// Grafana Cloud Database Observability — Alloy config
+//
+// Pipes pg_stat_statements + pg_stat_* + Postgres schema telemetry
+// from a self-managed Postgres into Grafana Cloud.
+//
+// IMPORTANT — Alloy v1.16.1 schema notes:
+//   - `database_observability.postgres` emits LOGS (query samples and
+//     stat snapshots as structured log records), NOT Prometheus
+//     metrics. `forward_to` expects a loki.LogsReceiver. The Cloud
+//     "Database Observability" app reads from those structured logs
+//     in Loki — no Mimir push needed for the DB obs surface itself.
+//   - The component takes ONLY `data_source_name` + `forward_to`.
+//     There is no `scrape_interval` or `collectors` attribute on
+//     this component in v1.16.1; the collectors run on a fixed
+//     60s cadence internally and all default collectors are on.
+//
+// IMPORTANT — connection rules:
+//   - Alloy talks DIRECTLY to Postgres on the wire — no PgBouncer
+//     or load balancer in between. The collector relies on stable
+//     session-level access to pg_stat_* views; a pooler rebinds
+//     the backend session every checkout, which breaks both the
+//     query-sample collector and pg_stat_statements snapshots.
+//
+// All credentials below are placeholders. Replace them, OR (preferred)
+// export the values as env vars and use `env("VAR_NAME")` in their
+// place — Alloy resolves env at startup and never logs them.
+// ============================================================
+
+logging {
+    level  = "info"
+    format = "logfmt"
+}
+
+// ── Database Observability collector ─────────────────────────
+//
+// Single component, four collectors run by default in v1.16.1:
+//   1. query_samples   — pg_stat_statements query stats + text
+//   2. query_tables    — pg_stat_user_tables / _indexes
+//   3. schema_details  — information_schema (table + column shape)
+//   4. explain_plans   — EXPLAIN per slow query
+//
+// Output is a stream of structured log records routed to Loki.
+
+database_observability.postgres "selfhosted_pg" {
+    // Direct DSN — host:port, not a pooler endpoint. sslmode=require is
+    // a sane default; upgrade to `verify-full` for prod or `disable`
+    // only when Postgres is on a private VPC link.
+    data_source_name = "postgres://grafana_dbo11y:CHANGE_ME_DB_PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require"
+
+    forward_to = [
+        loki.write.gc_logs.receiver,
+    ]
+}
+
+// ── Optional: Postgres logfile → Loki ────────────────────────
+//
+// Independent of the DB obs collector above — this tails the raw
+// Postgres logfile and ships every line to Loki so you can grep
+// authentication errors, autovacuum runs, etc. in Cloud Logs Explore.
+//
+// Adjust the path glob to match your log_directory / log_filename.
+// The DB obs component above does NOT need this — it pulls its
+// own samples directly from pg_stat_statements over the wire.
+// Comment this section out if you don't want raw log shipping.
+
+local.file_match "pg_logs" {
+    path_targets = [
+        {
+            __path__ = "/var/log/postgresql/postgresql-*.log",
+            job      = "postgresql",
+            instance = "DB_HOST:5432",
+            database = "DB_NAME",
+            cluster  = "selfhosted_pg",
+        },
+    ]
+}
+
+loki.source.file "pg_logs" {
+    targets    = local.file_match.pg_logs.targets
+    forward_to = [loki.process.pg_logs.receiver]
+}
+
+// Lightweight log pre-processing: turn the standard csvlog/stderr line
+// prefix into a structured label set so Grafana Cloud can filter on
+// severity / pid / db_user without expensive query-time regex.
+//
+// Adjust the regex if you've changed log_line_prefix from the default
+// `%m [%p] %q%u@%d`. The capture group names below assume the default.
+loki.process "pg_logs" {
+    forward_to = [loki.write.gc_logs.receiver]
+
+    stage.regex {
+        expression = "^(?P<timestamp>\\S+ \\S+ \\S+) \\[(?P<pid>\\d+)\\] (?P<user_db>[^ ]*)\\s*(?P<level>LOG|ERROR|WARNING|FATAL|PANIC|HINT|DETAIL|STATEMENT|NOTICE|DEBUG\\d?):\\s+(?P<msg>.*)$"
+    }
+    stage.labels {
+        values = {
+            level = "",
+            pid   = "",
+        }
+    }
+    // Drop high-cardinality fields from labels — keep them in the line.
+    stage.structured_metadata {
+        values = {
+            user_db = "",
+        }
+    }
+}
+
+// ── Grafana Cloud Loki remote_write ──────────────────────────
+//
+// Endpoint URL varies by your stack's region — find it under
+// Grafana Cloud → Connections → Loki → "Send Logs".
+// Username is a numeric instance id from the same page.
+// Password is a Cloud Access Policy token with the `logs:write` scope.
+
+loki.write "gc_logs" {
+    endpoint {
+        url = "https://logs-prod-XXX.grafana.net/loki/api/v1/push"
+
+        basic_auth {
+            username = "GRAFANA_CLOUD_LOKI_USERNAME"  // numeric instance id
+            password = "GRAFANA_CLOUD_API_TOKEN"      // token with `logs:write` scope
+        }
+    }
+
+    external_labels = {
+        cluster = "selfhosted_pg",
+        env     = "prod",  // change to "dev" / "staging" as appropriate
+    }
+}

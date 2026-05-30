@@ -25,7 +25,7 @@
  *   - `#FF8833` (orange), inner-arc highlight (drops in monochrome).
  *                             Grafana brand, stays fixed across themes.
  */
-import { useMemo } from "react";
+import { useId } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -41,9 +41,11 @@ export type LogoProps = {
 };
 
 export function Logo({ size = 24, monochrome = false, className, title }: LogoProps) {
-  // Random suffix so multiple Logo instances on the same page don't
-  // collide on the gradient id (would otherwise share the halo).
-  const id = useMemo(() => `clarion-halo-${Math.random().toString(36).slice(2, 8)}`, []);
+  // Stable, render-pure unique suffix so multiple Logo instances on the
+  // same page don't collide on the gradient id (would otherwise share the
+  // halo). useId is SSR-safe and deterministic; strip its colons so the
+  // value is a clean `url(#…)` reference.
+  const id = `clarion-halo-${useId().replace(/:/g, "")}`;
 
   return (
     <svg

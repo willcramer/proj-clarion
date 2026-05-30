@@ -396,7 +396,7 @@ function ProfileChangeRow({ row }: { row: ProfileAuditEntry }) {
         {formatDateTime(row.timestamp)}
       </td>
       <td className="px-4 py-3 text-[var(--color-text)]">
-        {row.company ?? hostOf(row.url) ?? <span className="text-[var(--color-text-faint)]">—</span>}
+        {row.company ?? hostOf(row.url ?? null) ?? <span className="text-[var(--color-text-faint)]">—</span>}
         <span className="ml-2 font-mono text-[11px] text-[var(--color-text-faint)]">
           {row.profile_id}
         </span>

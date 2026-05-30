@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
-  Sparkles, Globe, ChevronRight, CheckCircle2, AlertCircle, Loader2,
-  ExternalLink, Square, Rocket, Clock, Activity, Bug, RefreshCw, Info,
+  Sparkles, CheckCircle2, AlertCircle, Loader2,
+  ExternalLink, Square, Rocket, Clock, Bug, RefreshCw, Info,
   History, MinusCircle, ArrowLeft, FileSearch,
   ScrollText, ClipboardList, X,
 } from "lucide-react";
@@ -17,8 +17,8 @@ import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
 import { CrumbChip } from "@/components/CrumbChip";
-import { LogView } from "@/components/LogView";
 import { Pagination } from "@/components/Pagination";
+import { PipelineKpiCard } from "@/components/PipelineKpiCard";
 // PipelineStepper exists but the live view now uses the .journey-steps
 // inline buttons (below) for richer per-phase metadata. The stepper is
 // kept around for any future surface (history view, plan-detail mini
@@ -69,7 +69,13 @@ export function NewDemoPage() {
   const pipeline = usePipeline();
 
   async function stop() {
-    if (pipeline.pipelineId) await cancelPipeline(pipeline.pipelineId).catch(() => {});
+    const id = pipeline.pipelineId;
+    if (!id) return;
+    // Request cancellation (the server also flips the DB row to cancelled
+    // so a wedged task can't keep us spinning), then reconcile so the view
+    // converges immediately instead of waiting on the stream to notice.
+    await cancelPipeline(id).catch(() => {});
+    await pipeline.reconcile(id);
   }
 
   // ─── If a pipeline is in flight (or finished), show the live view ───
@@ -171,7 +177,17 @@ function BuildHistoryView() {
   });
 
   const all = list.data ?? [];
-  const kpis = useMemo(() => computeBuildKpis(all), [all]);
+
+  // Highlights — top 6 newest builds, NOT subject to the search/state
+  // filter (those narrow the All-builds table below). Newest-first by
+  // started_at; the server may already return in this order but we
+  // sort defensively so a future API change can't silently invert it.
+  const highlights = useMemo(
+    () => [...all].sort(
+      (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
+    ).slice(0, 6),
+    [all],
+  );
 
   // Apply filters BEFORE pagination so the page numbers reflect the
   // filtered set, not the raw list.
@@ -190,102 +206,34 @@ function BuildHistoryView() {
     });
   }, [all, filter, stateFilter]);
   const total = filtered.length;
+  // Clamp the active page so narrowing filters can't strand the table on
+  // an empty "page 4 of 1". Derived during render (not synced via an
+  // effect), so it stays consistent with the slice below.
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, pageCount);
   const paged = useMemo(
-    () => filtered.slice((page - 1) * pageSize, page * pageSize),
-    [filtered, page, pageSize],
+    () => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [filtered, currentPage, pageSize],
   );
-
-  // Reset page to 1 whenever filters narrow the result below current
-  // page's range, so the table doesn't show "empty page 4 of 1".
-  useMemo(() => { if ((page - 1) * pageSize >= total && total > 0) setPage(1); }, [page, pageSize, total]);
 
   return (
     <div className="space-y-6">
       <header>
-        <div className="text-[11px] font-mono uppercase tracking-[0.08em] text-[var(--color-text-faint)]">
-          Builds
-        </div>
-        <h1 className="mt-2 text-[26px] font-semibold tracking-tight leading-tight text-[var(--color-text)]">
-          Every run, all in one place.
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Builds</h1>
         <p className="text-[var(--color-text-muted)] mt-1 text-sm max-w-2xl">
           Phase, duration, status. Click any row to open its live view.{" "}
-          <span className="text-[var(--color-text-faint)]">
-            Start a new build from the dashboard&rsquo;s hero card.
+          <span className="text-[var(--color-text-faint)] tabular-nums">
+            {all.length} total
           </span>
         </p>
       </header>
 
-      {/* KPI strip, derived from the loaded pipelines list. Cheap; bounded
-          server-side at 200 rows so the math here is O(n) at worst. */}
-      <BuildKpiStrip kpis={kpis} />
-
-      <Card className="overflow-hidden">
-        {/* Card head with title, count, and filter controls (search +
-            state). Matches CDD pipelines mockup. */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] flex-wrap">
-          <h2 className="text-sm font-medium text-[var(--color-text)]">All builds</h2>
-          <span className="text-[11px] font-mono text-[var(--color-text-faint)]">
-            {all.length.toLocaleString()} total
-            {total !== all.length && (
-              <span className="ml-1">({total.toLocaleString()} match)</span>
-            )}
-          </span>
-          <div className="ml-auto flex items-center gap-2 flex-wrap">
-            <div
-              className={cn(
-                "flex items-center gap-1.5 h-8 px-2.5 rounded-md",
-                "bg-[var(--color-canvas-elev2)]/60 border border-[var(--color-border)]",
-                "focus-within:border-[color:var(--color-accent-border)] transition-colors",
-                "min-w-[200px]",
-              )}
-            >
-              <FileSearch size={12} className="text-[var(--color-text-faint)] shrink-0" />
-              <input
-                type="text"
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter by company or host"
-                aria-label="Filter builds"
-                className={cn(
-                  "flex-1 bg-transparent outline-none border-0 text-xs",
-                  "text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]",
-                  "min-w-0",
-                )}
-              />
-              {filter && (
-                <button
-                  type="button"
-                  onClick={() => setFilter("")}
-                  aria-label="Clear filter"
-                  className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-            <select
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value as typeof stateFilter)}
-              aria-label="Filter by state"
-              className={cn(
-                "h-8 pl-2 pr-1 rounded-md text-xs font-mono",
-                "bg-[var(--color-canvas-elev2)]/60 border border-[var(--color-border)]",
-                "hover:border-[var(--color-border-strong)] focus-visible:border-[color:var(--color-accent-border)]",
-                "transition-colors",
-              )}
-            >
-              <option value="all">All states</option>
-              <option value="running">Running</option>
-              <option value="done">Done</option>
-              <option value="failed">Failed</option>
-            </select>
-          </div>
-        </div>
-
-        {list.isLoading ? (
-          <div className="p-8 text-center text-[var(--color-text-faint)]">Loading&hellip;</div>
-        ) : all.length === 0 ? (
+      {list.isLoading ? (
+        <Card>
+          <div className="p-8 text-center text-[var(--color-text-faint)]">Loading…</div>
+        </Card>
+      ) : all.length === 0 ? (
+        <Card>
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <History size={28} className="text-[var(--color-text-faint)] mb-3" />
             <div className="text-sm font-medium">No builds yet</div>
@@ -293,179 +241,152 @@ function BuildHistoryView() {
               Start one from the dashboard&rsquo;s &ldquo;What are we showing today?&rdquo; card.
             </div>
           </div>
-        ) : total === 0 ? (
-          <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">
-            No builds match &ldquo;{filter}&rdquo;{stateFilter !== "all" ? ` in state ${stateFilter}` : ""}.
-          </div>
-        ) : (
-          <>
-            <table className="w-full text-sm">
-              <thead className="text-[10px] text-[var(--color-text-faint)] uppercase tracking-wider font-mono border-b border-[var(--color-border)]">
-                <tr>
-                  <th className="text-left  font-medium px-4 py-2.5">Run</th>
-                  <th className="text-left  font-medium px-4 py-2.5">Target</th>
-                  <th className="text-left  font-medium px-4 py-2.5">State</th>
-                  <th className="text-left  font-medium px-4 py-2.5">Phase</th>
-                  <th className="text-right font-medium px-4 py-2.5">Duration</th>
-                  <th className="text-right font-medium px-4 py-2.5">Started</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paged.map((b) => (
-                  <BuildHistoryRow
-                    key={b.pipeline_id}
-                    build={b}
-                    onClick={() => navigate(`/pipelines/${b.pipeline_id}`)}
-                  />
-                ))}
-              </tbody>
-            </table>
-            <Pagination
-              page={page}
-              pageSize={pageSize}
-              total={total}
-              onPageChange={setPage}
-              onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
-            />
-          </>
-        )}
-      </Card>
+        </Card>
+      ) : (
+        <>
+          {/* Recent — top 6 newest builds as compact KPI cards.
+              Same shape as /profiles, /plans, /runs. */}
+          <section aria-label="Recent builds">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                Recent
+              </h2>
+              <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                {highlights.length} of {all.length}
+              </span>
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {highlights.map((b) => (
+                <PipelineKpiCard
+                  key={b.pipeline_id}
+                  pipeline={b}
+                  compact
+                  onClick={() => navigate(`/pipelines/${b.pipeline_id}`)}
+                />
+              ))}
+            </div>
+          </section>
+
+          {/* All builds — paginated table with search + state filter.
+              Filter chrome lives inline at the top of the table card so
+              an SE with 50+ builds can narrow quickly. */}
+          {all.length > 6 && (
+            <section aria-label="All builds">
+              <div className="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
+                <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                  All builds
+                </h2>
+                <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                  {all.length.toLocaleString()} total
+                  {total !== all.length && (
+                    <span className="ml-1">({total.toLocaleString()} match)</span>
+                  )}
+                </span>
+              </div>
+              <Card className="p-0 overflow-hidden">
+                {/* Filter row — kept INSIDE the table card so it sits right
+                    above the data it filters. */}
+                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--color-border)] flex-wrap">
+                  <div
+                    className={cn(
+                      "flex items-center gap-1.5 h-8 px-2.5 rounded-md",
+                      "bg-[var(--color-canvas-elev2)]/60 border border-[var(--color-border)]",
+                      "focus-within:border-[color:var(--color-accent-border)] transition-colors",
+                      "min-w-[220px]",
+                    )}
+                  >
+                    <FileSearch size={12} className="text-[var(--color-text-faint)] shrink-0" />
+                    <input
+                      type="text"
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="Filter by company or host"
+                      aria-label="Filter builds"
+                      className={cn(
+                        "flex-1 bg-transparent outline-none border-0 text-xs",
+                        "text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]",
+                        "min-w-0",
+                      )}
+                    />
+                    {filter && (
+                      <button
+                        type="button"
+                        onClick={() => setFilter("")}
+                        aria-label="Clear filter"
+                        className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                  <select
+                    value={stateFilter}
+                    onChange={(e) => setStateFilter(e.target.value as typeof stateFilter)}
+                    aria-label="Filter by state"
+                    className={cn(
+                      "h-8 pl-2 pr-1 rounded-md text-xs font-mono",
+                      "bg-[var(--color-canvas-elev2)]/60 border border-[var(--color-border)]",
+                      "hover:border-[var(--color-border-strong)] focus-visible:border-[color:var(--color-accent-border)]",
+                      "transition-colors",
+                    )}
+                  >
+                    <option value="all">All states</option>
+                    <option value="running">Running</option>
+                    <option value="done">Done</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                </div>
+
+                {total === 0 ? (
+                  <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">
+                    No builds match &ldquo;{filter}&rdquo;
+                    {stateFilter !== "all" ? ` in state ${stateFilter}` : ""}.
+                  </div>
+                ) : (
+                  <>
+                    <table className="w-full text-sm">
+                      <thead className="text-[10px] text-[var(--color-text-faint)] uppercase tracking-wider font-mono border-b border-[var(--color-border)]">
+                        <tr>
+                          <th className="text-left  font-medium px-4 py-2.5">Run</th>
+                          <th className="text-left  font-medium px-4 py-2.5">Target</th>
+                          <th className="text-left  font-medium px-4 py-2.5">State</th>
+                          <th className="text-left  font-medium px-4 py-2.5">Phase</th>
+                          <th className="text-right font-medium px-4 py-2.5">Duration</th>
+                          <th className="text-right font-medium px-4 py-2.5">Started</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {paged.map((b) => (
+                          <BuildHistoryRow
+                            key={b.pipeline_id}
+                            build={b}
+                            onClick={() => navigate(`/pipelines/${b.pipeline_id}`)}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                    <Pagination
+                      page={currentPage}
+                      pageSize={pageSize}
+                      total={total}
+                      onPageChange={setPage}
+                      onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+                    />
+                  </>
+                )}
+              </Card>
+            </section>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
-// BuildKpiStrip: 4 tiles per the CDD pipelines mockup
-// ──────────────────────────────────────────────────────────────────
-
-interface BuildKpis {
-  runningNow: number;
-  avgRunningDurationMs: number | null;
-  todayTotal: number;
-  todaySuccess: number;
-  todayFailed: number;
-  last7Success: number | null;
-  last7Total: number;
-  p50DurationMs: number | null;
-  p95DurationMs: number | null;
-}
-
-function computeBuildKpis(rows: PipelineSummary[]): BuildKpis {
-  const now = Date.now();
-  const dayAgo = now - 24 * 3600 * 1000;
-  const weekAgo = now - 7 * 24 * 3600 * 1000;
-
-  const durMs = (b: PipelineSummary): number | null => {
-    if (!b.started_at) return null;
-    const end = b.finished_at ? new Date(b.finished_at).getTime() : now;
-    return Math.max(0, end - new Date(b.started_at).getTime());
-  };
-
-  const running = rows.filter((b) => b.status === "running");
-  const runningDurations = running.map(durMs).filter((d): d is number => d !== null);
-  const avgRunningDurationMs = runningDurations.length === 0
-    ? null
-    : runningDurations.reduce((a, b) => a + b, 0) / runningDurations.length;
-
-  const today = rows.filter((b) => new Date(b.started_at).getTime() >= dayAgo);
-  const todaySuccess = today.filter((b) => b.status === "done").length;
-  const todayFailed  = today.filter((b) => b.status === "failed" || b.status === "cancelled").length;
-
-  const lastWeek = rows.filter((b) =>
-    new Date(b.started_at).getTime() >= weekAgo
-    && (b.status === "done" || b.status === "failed" || b.status === "cancelled"),
-  );
-  const last7Total = lastWeek.length;
-  const last7Success = last7Total === 0
-    ? null
-    : lastWeek.filter((b) => b.status === "done").length / last7Total;
-
-  // Percentiles over finished builds only.
-  const finished = rows.filter((b) => b.status === "done" && b.finished_at);
-  const finishedDurs = finished
-    .map(durMs)
-    .filter((d): d is number => d !== null)
-    .sort((a, b) => a - b);
-  const pct = (p: number): number | null => {
-    if (finishedDurs.length === 0) return null;
-    const idx = Math.min(finishedDurs.length - 1, Math.floor(p * finishedDurs.length));
-    return finishedDurs[idx];
-  };
-
-  return {
-    runningNow: running.length,
-    avgRunningDurationMs,
-    todayTotal: today.length,
-    todaySuccess,
-    todayFailed,
-    last7Success,
-    last7Total,
-    p50DurationMs: pct(0.5),
-    p95DurationMs: pct(0.95),
-  };
-}
-
-function BuildKpiStrip({ kpis }: { kpis: BuildKpis }) {
-  const successPct = kpis.last7Success === null ? null : Math.round(kpis.last7Success * 100);
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <KpiTile
-        label="Running now"
-        value={kpis.runningNow.toLocaleString()}
-        hint={kpis.avgRunningDurationMs !== null
-          ? `avg ${formatDuration(kpis.avgRunningDurationMs)}`
-          : "none in flight"}
-        tone={kpis.runningNow > 0 ? "live" : "neutral"}
-      />
-      <KpiTile
-        label="Today"
-        value={kpis.todayTotal.toLocaleString()}
-        hint={kpis.todayTotal > 0
-          ? `${kpis.todaySuccess} success · ${kpis.todayFailed} failed`
-          : "no builds today"}
-        tone="neutral"
-      />
-      <KpiTile
-        label="7-day success"
-        value={successPct === null ? "," : `${successPct}%`}
-        hint={kpis.last7Total > 0 ? `across ${kpis.last7Total} finished` : "no finished runs"}
-        tone={successPct === null ? "neutral" : successPct >= 80 ? "live" : successPct >= 50 ? "warn" : "danger"}
-      />
-      <KpiTile
-        label="P50 duration"
-        value={kpis.p50DurationMs !== null ? formatDuration(kpis.p50DurationMs) : ","}
-        hint={kpis.p95DurationMs !== null ? `P95 ${formatDuration(kpis.p95DurationMs)}` : "no data yet"}
-        tone="neutral"
-      />
-    </div>
-  );
-}
-
-function KpiTile({
-  label, value, hint, tone,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  tone: "live" | "neutral" | "warn" | "danger";
-}) {
-  const valueClass =
-    tone === "live"   ? "text-[var(--color-live)]"
-  : tone === "warn"   ? "text-[var(--color-warning)]"
-  : tone === "danger" ? "text-[var(--color-danger)]"
-  : "text-[var(--color-text)]";
-  return (
-    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] p-4">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
-        {label}
-      </div>
-      <div className={cn("text-[26px] font-semibold tabular-nums mt-1 leading-none", valueClass)}>
-        {value}
-      </div>
-      <div className="text-[11px] text-[var(--color-text-muted)] mt-2">{hint}</div>
-    </div>
-  );
-}
+// BuildKpiStrip / computeBuildKpis / KpiTile removed — the /builds
+// page now matches /profiles + /plans + /runs (no top-of-page strip;
+// status visible per-card). Old aggregate metrics surface lived above
+// the table; replaced by the per-card status pill on the Recent grid.
 
 // ──────────────────────────────────────────────────────────────────
 // BuildHistoryRow: includes the inline phase progress bar
@@ -487,6 +408,9 @@ function BuildHistoryRow({
   const host = safeHost(build.url);
   const dur = (() => {
     if (!build.started_at) return null;
+    // Intentional wall-clock read: a running build's elapsed time depends
+    // on "now", and this row re-renders on the list's polling refetch.
+    // eslint-disable-next-line react-hooks/purity
     const end = build.finished_at ? new Date(build.finished_at).getTime() : Date.now();
     return end - new Date(build.started_at).getTime();
   })();
@@ -576,183 +500,6 @@ function formatRelativeTime(iso: string): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.round(hr / 24);
   return `${day}d ago`;
-}
-
-/** Last 5 builds the API process has seen. Each row deep-links into
- *  /pipelines?p=<id> for full per-event drill-in (logs, phase rollup,
- *  diagnosis). The Re-run button kicks off a fresh build with the same
- *  params, useful when the previous one failed late (e.g. kg-publish)
- *  and you want a clean retry without retyping the URL.
- *
- *  Pipeline history lives in-memory on the API process today, so this
- *  list resets on API restart. Persisting to Postgres is on the
- *  backend backlog. */
-function RecentBuilds({ onReRun }: { onReRun: (s: PipelineSummary) => void }) {
-  const list = useQuery({
-    queryKey: ["pipelines"],
-    queryFn: listPipelines,
-    // Refresh faster (3s) when builds are running so the running-count
-    // and per-row status badges feel live as users queue more builds.
-    refetchInterval: (q) => {
-      const data = q.state.data;
-      const anyRunning = (data ?? []).some((p) => p.status === "running");
-      return anyRunning ? 3_000 : 10_000;
-    },
-  });
-  const allBuilds = list.data ?? [];
-  const running = allBuilds.filter((b) => b.status === "running");
-  // Recently-finished builds, but always show at least 5 total rows so
-  // the section feels populated even when there are no in-flight builds.
-  const finished = allBuilds.filter((b) => b.status !== "running")
-    .slice(0, Math.max(5 - running.length, 3));
-
-  if (list.isLoading) return null;
-  if (allBuilds.length === 0) {
-    return (
-      <Card className="p-5 max-w-2xl">
-        <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
-          <History size={14} />
-          <span>No builds yet on this API process.</span>
-        </div>
-      </Card>
-    );
-  }
-
-  return (
-    <Card className="p-5 max-w-2xl">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <History size={14} className="text-[var(--color-text-muted)]" />
-          <span>Recent builds</span>
-          {running.length > 0 && (
-            <span
-              className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--color-info)]/20 text-[var(--color-info)] inline-flex items-center gap-1"
-              title="Builds currently running"
-            >
-              <Loader2 size={9} className="animate-spin" />
-              {running.length} running
-            </span>
-          )}
-        </div>
-        <Link
-          to="/pipelines"
-          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex items-center gap-1"
-        >
-          All <ChevronRight size={12} />
-        </Link>
-      </div>
-      {/* Running builds get their own visually-distinct group on top,        *  with a faint accent border so the SE eye lands there first
-       *  when they're juggling multiple in-flight pipelines. */}
-      {running.length > 0 && (
-        <div className="mb-3 pb-3 border-b border-[var(--color-border)] space-y-1">
-          <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-faint)] mb-1.5">
-            In flight
-          </div>
-          {running.map((s) => (
-            <RecentBuildRow key={s.pipeline_id} s={s} onReRun={() => onReRun(s)} />
-          ))}
-        </div>
-      )}
-      <div className="space-y-1">
-        {finished.map((s) => (
-          <RecentBuildRow key={s.pipeline_id} s={s} onReRun={() => onReRun(s)} />
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function RecentBuildRow({ s, onReRun }: { s: PipelineSummary; onReRun: () => void }) {
-  const pipeline = usePipeline();
-  const qc = useQueryClient();
-  const [cancelling, setCancelling] = useState(false);
-  const dur = useMemo(() => {
-    if (!s.started_at) return null;
-    const end = s.finished_at ? new Date(s.finished_at).getTime() : Date.now();
-    return end - new Date(s.started_at).getTime();
-  }, [s.started_at, s.finished_at]);
-
-  const StatusIcon =
-    s.status === "running" ? Loader2 :
-    s.status === "done"    ? CheckCircle2 :
-    AlertCircle;
-  const statusClass =
-    s.status === "running" ? "text-[var(--color-info)] animate-spin" :
-    s.status === "done"    ? "text-[var(--color-success)]" :
-    "text-[var(--color-danger)]";
-
-  // Just show the host for compactness; full URL is in the title.
-  let host = s.url;
-  try { host = new URL(s.url).host.replace(/^www\./, ""); } catch { /* keep raw */ }
-
-  /** Cancel from the list, without navigating into the live view first.
-   *  Saves clicks during demos when an SE realises a wrong URL is queued
-   *  behind two other builds. The optimistic update is just "show
-   *  cancelling…" until the next 3s refetch resolves the row to
-   *  status=cancelled. */
-  async function cancel() {
-    if (!window.confirm(`Cancel build for ${host}? In-flight phases will stop.`)) return;
-    setCancelling(true);
-    try {
-      await cancelPipeline(s.pipeline_id);
-    } catch (e) {
-      window.alert(`Couldn't cancel: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      // Refresh the list so the row flips to cancelled without waiting
-      // for the next refetchInterval tick.
-      qc.invalidateQueries({ queryKey: ["pipelines"] });
-      setCancelling(false);
-    }
-  }
-
-  // Click → snapshot-replay this pipeline into the live view. Avoids a
-  // round-trip through /pipelines just to inspect a past build.
-  return (
-    <div className="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-white/[0.03] group">
-      <StatusIcon size={14} className={cn("shrink-0", statusClass)} />
-      <button
-        onClick={() => void pipeline.loadPipeline(s.pipeline_id)}
-        className="flex-1 min-w-0 flex items-center gap-2 text-left"
-        title={`${s.url} · ${s.pipeline_id}`}
-      >
-        <span className="text-sm truncate">{host}</span>
-        {s.company && (
-          <span className="text-xs text-[var(--color-text-faint)] truncate">{s.company}</span>
-        )}
-      </button>
-      <span className="text-xs text-[var(--color-text-faint)] tabular-nums shrink-0">
-        {s.days}d · {formatDuration(dur)}
-      </span>
-      {s.status === "running" ? (
-        // In-flight: surface a destructive × so the SE can stop the
-        // build without first opening the live view. Visible on the
-        // row (not gated by hover) because the running state is
-        // already attention-grabbing; the × must be reachable in one
-        // click during a live demo.
-        <button
-          onClick={cancel}
-          disabled={cancelling}
-          title="Cancel build"
-          aria-label={`Cancel build for ${host}`}
-          className={cn(
-            "p-1.5 rounded transition-colors",
-            "text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]",
-            "disabled:opacity-50 disabled:cursor-not-allowed",
-          )}
-        >
-          {cancelling ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />}
-        </button>
-      ) : (
-        <button
-          onClick={onReRun}
-          title="Re-run with same URL/days"
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-white/[0.05] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-        >
-          <RefreshCw size={12} />
-        </button>
-      )}
-    </div>
-  );
 }
 
 function PipelineRunView({
@@ -1313,205 +1060,6 @@ function LogLine({ line }: { line: string }) {
   );
 }
 
-function PhaseRow({
-  phase, state, metric, isLast,
-  onResume, resumeDisabledReason, showResume, resumeIsRetest,
-  focused, onClick,
-}: {
-  phase: PipelinePhase;
-  state: PhaseState;
-  metric: { durationMs: number | null; logLineCount: number; errorCount: number } | undefined;
-  isLast: boolean;
-  /** Always-visible button (when terminal) that starts a new pipeline from
-   *  this phase with the prior pipeline as parent. The parent decides
-   *  whether the inputs that phase needs are available. */
-  onResume?: () => void | Promise<void>;
-  /** When a resume isn't possible (e.g. no plan_id available), show a
-   *  disabled button with this reason in the title. */
-  resumeDisabledReason?: string;
-  /** Whether to show the resume button slot at all (pipeline terminal). */
-  showResume?: boolean;
-  /** True when this is a successful phase being re-run for testing/iteration
-   *  rather than retrying after a failure. Reword + soften the styling so
-   *  it's visually distinct from the failure-recovery affordance. */
-  resumeIsRetest?: boolean;
-  /** True when the right-side log panel is locked to this phase. */
-  focused?: boolean;
-  /** Click anywhere on the row → toggle "lock log panel to this phase". */
-  onClick?: () => void;
-}) {
-  const Icon =
-    state.status === "running" ? Loader2 :
-    state.status === "done" ? CheckCircle2 :
-    state.status === "failed" ? AlertCircle :
-    state.status === "skipped" ? MinusCircle :
-    ChevronRight;
-  const iconClass =
-    state.status === "running" ? "text-[var(--color-info)] animate-spin" :
-    state.status === "done" ? "text-[var(--color-success)]" :
-    state.status === "failed" ? "text-[var(--color-danger)]" :
-    state.status === "skipped" ? "text-[var(--color-text-faint)] opacity-50" :
-    "text-[var(--color-text-faint)]";
-
-  return (
-    <div
-      onClick={onClick}
-      className={cn(
-        "flex items-start gap-3 px-2 py-2.5 group rounded-md transition-colors",
-        !isLast && "border-b border-[var(--color-border)]",
-        onClick && "cursor-pointer",
-        // Skipped phases (resume-from-later builds) get muted so they
-        // visually fade into the background. They're not errors, they
-        // just didn't run this time.
-        state.status === "skipped" && "opacity-55",
-        focused
-          ? "bg-[var(--color-accent)]/8 ring-1 ring-[var(--color-accent)]/30"
-          : onClick && "hover:bg-white/[0.02]",
-      )}
-    >
-      <Icon size={14} className={cn("mt-0.5 shrink-0", iconClass)} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{PHASE_LABELS[phase]}</span>
-          {focused && (
-            <span className="text-[10px] font-mono text-[var(--color-accent)]/80">
-              ·  inspecting
-            </span>
-          )}
-          {state.artifact && (
-            <span className="font-mono text-[10px] text-[var(--color-text-faint)] truncate">
-              {state.artifact.length > 12 ? state.artifact.slice(0, 8) + "…" : state.artifact}
-            </span>
-          )}
-          {state.status === "done" && <Badge tone="success">done</Badge>}
-          {state.status === "running" && <Badge tone="info">running</Badge>}
-          {state.status === "failed" && <Badge tone="danger">failed</Badge>}
-          {state.status === "skipped" && <Badge tone="neutral">skipped</Badge>}
-        </div>
-        <div className="text-xs text-[var(--color-text-muted)] mt-0.5">
-          {state.message || PHASE_HINTS[phase]}
-        </div>
-        {metric && state.status !== "pending" && (
-          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-[var(--color-text-faint)] font-mono">
-            <span className="inline-flex items-center gap-1"><Clock size={10} />{formatDuration(metric.durationMs)}</span>
-            <span className="inline-flex items-center gap-1"><Activity size={10} />{metric.logLineCount} lines</span>
-            {metric.errorCount > 0 && (
-              <span className="inline-flex items-center gap-1 text-[var(--color-warning)]">
-                <Bug size={10} />{metric.errorCount} err
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-      {showResume && (
-        <button
-          onClick={(e) => {
-            // Don't toggle the row's inspect-focus when clicking the
-            // resume button itself.
-            e.stopPropagation();
-            void onResume?.();
-          }}
-          disabled={!onResume}
-          title={
-            !onResume
-              ? resumeDisabledReason ?? "Inputs for this phase aren't available"
-              : resumeIsRetest
-              ? `Re-test ${PHASE_LABELS[phase]} only, useful when iterating on the code that affects this phase. Reuses profile + plan; new pipeline_id linked to this one as parent.`
-              : `Re-run from ${PHASE_LABELS[phase]} (skips earlier phases, reuses profile/plan from this build)`
-          }
-          className={cn(
-            "shrink-0 self-center transition-colors",
-            "px-2 h-7 rounded-md border text-xs flex items-center gap-1.5",
-            !onResume
-              ? "border-[var(--color-border)]/40 bg-transparent text-[var(--color-text-faint)] cursor-not-allowed opacity-50"
-              : resumeIsRetest
-              // Successful-phase re-test → softer / hover-visible only.
-              // Don't compete visually with the failure-recovery flavor.
-              ? "border-[var(--color-border)]/40 bg-white/[0.01] opacity-0 group-hover:opacity-100 hover:bg-white/[0.05] hover:border-[var(--color-border)] text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)]"
-              // Failure-recovery → always-visible, accent-tinted.
-              : "border-[var(--color-border)] bg-white/[0.02] hover:bg-[var(--color-accent)]/10 hover:border-[var(--color-accent)]/40 text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
-          )}
-        >
-          <RefreshCw size={11} />
-          <span>{resumeIsRetest ? "Re-test" : "Re-run"}</span>
-        </button>
-      )}
-    </div>
-  );
-}
-
-/** Top-of-page key metrics. While running, total ticks live; on terminal
- *  status, freezes at the final values. Kept compact, meant for a
- *  glance, not deep analysis. */
-function MetricsStrip({
-  metrics, status,
-}: {
-  metrics: ReturnType<typeof computeMetrics>;
-  status: ReturnType<typeof usePipeline>["status"];
-}) {
-  const phasesDone = metrics.phases.filter((m) => m.status === "done").length;
-  const phasesTotal = metrics.phases.length;
-  return (
-    <Card className="p-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-        <Stat
-          icon={Clock}
-          label="Total"
-          value={formatDuration(metrics.totalDurationMs)}
-          tone={status === "running" ? "info" : status === "done" ? "success" : status === "failed" ? "danger" : "neutral"}
-        />
-        <Stat
-          icon={CheckCircle2}
-          label="Phases done"
-          value={`${phasesDone}/${phasesTotal}`}
-          tone={phasesDone === phasesTotal ? "success" : "neutral"}
-        />
-        <Stat
-          icon={Activity}
-          label="Log lines"
-          value={metrics.totalLogLines.toLocaleString()}
-          tone="neutral"
-        />
-        <Stat
-          icon={Bug}
-          label="Error-shaped lines"
-          value={metrics.totalErrors.toLocaleString()}
-          tone={metrics.totalErrors > 0 ? "danger" : "neutral"}
-        />
-      </div>
-    </Card>
-  );
-}
-
-function Stat({
-  icon: Icon, label, value, tone,
-}: {
-  icon: typeof Clock;
-  label: string;
-  value: string;
-  tone: "neutral" | "info" | "success" | "danger";
-}) {
-  const toneClass = {
-    neutral: "text-[var(--color-text)]",
-    info:    "text-[var(--color-info)]",
-    success: "text-[var(--color-success)]",
-    danger:  "text-[var(--color-danger)]",
-  }[tone];
-  return (
-    <div className="flex items-center gap-3">
-      <Icon size={14} className="text-[var(--color-text-faint)]" />
-      <div>
-        <div className="text-[10px] uppercase tracking-wider text-[var(--color-text-faint)]">
-          {label}
-        </div>
-        <div className={cn("text-base font-semibold tabular-nums", toneClass)}>
-          {value}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Pattern-matched diagnosis with concrete next steps. The `dx` payload
  *  comes from `diagnose()` in lib/diagnose.ts. Each branch there should
  *  surface a kind+summary+suggested-fix that's specific enough to act on. */
@@ -1567,62 +1115,6 @@ function DiagnosisCard({
           </div>
         </div>
       </div>
-    </Card>
-  );
-}
-
-function PhaseDetail({
-  phases, focusPhase, onClearFocus,
-}: {
-  phases: Record<PipelinePhase, PhaseState>;
-  /** When non-null, lock the panel to this phase regardless of which
-   *  one is currently active. Set by clicking a phase row. Lets the
-   *  user scroll back through any phase's history mid-run. */
-  focusPhase?: PipelinePhase | null;
-  onClearFocus?: () => void;
-}) {
-  const order = [...PIPELINE_PHASES].reverse();
-  const autoFocus =
-    order.find((p) => phases[p].status === "running")
-    ?? order.find((p) => phases[p].status === "failed")
-    ?? order.find((p) => phases[p].status === "done")
-    ?? "research";
-  // Manual focus wins; otherwise track whichever phase has activity.
-  const focus = focusPhase ?? autoFocus;
-  const state = phases[focus];
-  const isManual = focusPhase !== null && focusPhase !== undefined;
-
-  return (
-    <Card className="flex flex-col h-[560px] overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--color-border)]">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-medium flex items-center gap-2">
-            {PHASE_LABELS[focus]}
-            {isManual && (
-              <button
-                onClick={onClearFocus}
-                title="Unlock, let the panel auto-track the active phase"
-                className="text-[10px] font-mono text-[var(--color-accent)]/70 hover:text-[var(--color-accent)] uppercase tracking-wider"
-              >
-                locked · clear
-              </button>
-            )}
-          </div>
-          <div className="text-xs text-[var(--color-text-faint)]">{state.logs.length} lines</div>
-        </div>
-        <div className="text-xs text-[var(--color-text-muted)] mt-0.5">{PHASE_HINTS[focus]}</div>
-      </div>
-      <LogView
-        lines={state.logs}
-        emptyText={
-          isManual
-            ? `${PHASE_LABELS[focus]} hasn't produced any output yet.`
-            : "Waiting for output…"
-        }
-        // Card height is fixed at 560 + ~80 for the header → body fills.
-        maxHeight="100%"
-        className="flex-1"
-      />
     </Card>
   );
 }

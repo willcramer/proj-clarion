@@ -638,9 +638,12 @@ def _run_doctor_after_emit_start(plan_id: str, customer: str | None, wait_second
                    "Defaults to the source profile slug (e.g. 'acme_retail').")
 @click.option("--env", default=None,
               help="asserts_env value to tag entities with. Default: the "
-                   "customer slug (so the Asserts entity-graph env filter "
-                   "naturally separates customers). Pass an explicit value "
-                   "for multi-environment demos (--env staging-bluesky, etc.).")
+                   "customer slug, so the Asserts entity-graph env filter "
+                   "naturally separates demos (env=acme_retail, env=globex_mfg, "
+                   "etc.). Also pins deployment.environment to the same "
+                   "value so target_info and observation-level metrics "
+                   "stay in the same env scope. Pass an explicit value for "
+                   "multi-environment demos (--env staging-acme_retail, etc.).")
 @click.option("--site", default="demo", help="asserts_site value to tag entities with.")
 @click.option("--doctor/--no-doctor", default=True,
               help="Auto-run the KG health check ~75s after starting the emitter "
@@ -739,16 +742,15 @@ def kg_publish(plan_id: str, push_rules: bool, emit: bool,
         return
 
     # Pre-resolve effective env so the panel + emitter agree.
-    # Source-of-truth for the default is `clarion_env()` (reads
-    # CLARION_ASSERTS_ENV, default "dev"). Don't fall back to the
-    # customer slug — that's the regression we fixed in 2026-05.
-    from proj_clarion.observability.otlp import clarion_env
+    # Mirrors EntityEmitter's default: `env or customer_slug`. Keeps
+    # asserts.env and deployment.environment aligned to one customer
+    # scope so the entity-graph env filter separates demos cleanly.
     effective_customer = (
         customer
         or (plan.source_profile_id or "").removeprefix("prof-").strip("-").lower()
         or "clarion"
     )
-    effective_env = env or clarion_env()
+    effective_env = env or effective_customer
     console.print(Panel.fit(
         f"[bold]Starting entity emitter[/bold]\n"
         f"entities: {len(expanded.nodes)}\n"

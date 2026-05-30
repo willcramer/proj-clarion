@@ -703,6 +703,117 @@ def build_command_center_dashboard(
         )); pid += 1
         y += 8
 
+    # ── Industrial-ops section: OEE + plant geomap ──
+    # Only renders when the KG carries plant business_units (detected by
+    # `bu-plant-` node_id prefix from the planner's b2b_industrial output
+    # OR explicit latitude attribute on a business_unit). Skips silently
+    # for retail / healthcare / SaaS demos where these panels would be
+    # meaningless.
+    plant_nodes = [
+        n for n in plan.knowledge_graph.nodes
+        if n.business_subtype == "business_unit"
+        and (n.node_id.startswith("bu-plant-")
+             or n.attributes.get("latitude") is not None)
+    ]
+    if plant_nodes:
+        # Section divider — a row header so SEs / Eric see where the
+        # industrial-ops story starts on the dashboard.
+        panels.append({
+            "id": pid,
+            "type": "row",
+            "title": "🏭 Plant Operations — OEE & Global Footprint",
+            "collapsed": False,
+            "gridPos": {"x": 0, "y": y, "w": 24, "h": 1},
+            "panels": [],
+        }); pid += 1
+        y += 1
+
+        # OEE headline gauge — left tile, single value across all plants.
+        oee_expr = (
+            'avg('
+            f'clarion_plant_availability_ratio{{{cust_filter}}}'
+            f' * clarion_plant_performance_ratio{{{cust_filter}}}'
+            f' * clarion_plant_quality_ratio{{{cust_filter}}}'
+            ')'
+        )
+        panels.append(_gauge_panel(
+            pid, x=0, y=y, w=6, h=8,
+            title="🎯 Overall Equipment Effectiveness",
+            description="OEE = Availability × Performance × Quality. World-class "
+                        "manufacturing threshold is 85%. Sourced from synthetic "
+                        "feeders emitted per plant + line.",
+            expr=oee_expr,
+        )); pid += 1
+
+        # OEE trend by plant — right tile, timeseries.
+        panels.append(_timeseries_panel(
+            pid, x=6, y=y, w=12, h=8,
+            title="📈 OEE Trend by Plant",
+            description="OEE components multiplied per plant, averaged across "
+                        "production lines. Each line is one of the named "
+                        "facilities (St. Paul, Oakdale, Nanjing, Shirwal, Costa Rica).",
+            expr=(
+                'avg by (plant) ('
+                f'clarion_plant_availability_ratio{{{cust_filter}}}'
+                f' * clarion_plant_performance_ratio{{{cust_filter}}}'
+                f' * clarion_plant_quality_ratio{{{cust_filter}}}'
+                ')'
+            ),
+            legend_format="{{plant}}",
+        )); pid += 1
+
+        # Defect rate by plant — far right, the "quality story" tile.
+        panels.append(_timeseries_panel(
+            pid, x=18, y=y, w=6, h=8,
+            title="🚨 Defect Rate by Plant",
+            description="1 − quality_ratio per plant. Spikes correlate with "
+                        "incoming raw-material lot variance or operator changeover.",
+            expr=f'avg by (plant) (1 - clarion_plant_quality_ratio{{{cust_filter}}})',
+            legend_format="{{plant}}",
+        )); pid += 1
+        y += 8
+
+        # Geomap — full-width, 8 tall, capping the industrial section.
+        panels.append({
+            "id": pid,
+            "type": "geomap",
+            "title": "🌍 Global Plant Footprint",
+            "description": f"All {customer_display} manufacturing facilities with live "
+                           "telemetry. Marker location derived from clarion_latitude "
+                           "/ clarion_longitude labels on the plant business_unit "
+                           "entity. Click a marker to drill into per-plant OEE.",
+            "datasource": _prom_ref(),
+            "gridPos": {"x": 0, "y": y, "w": 24, "h": 8},
+            "targets": [_prom_target(
+                f'last_over_time(clarion_entity_info{{{cust_filter},'
+                f' clarion_entity_kind="business_unit", clarion_latitude!=""}}[5m])',
+                instant=True,
+            )],
+            "fieldConfig": {
+                "defaults": {"custom": {"hideFrom": {"viz": False, "legend": False}}},
+                "overrides": [],
+            },
+            "options": {
+                "view": {"id": "zero", "lat": 20, "lon": 30, "zoom": 1.6},
+                "controls": {"showZoom": True, "showAttribution": True},
+                "basemap": {"type": "default"},
+                "layers": [{
+                    "type": "markers",
+                    "name": "Facilities",
+                    "config": {
+                        "showLegend": True,
+                        "style": {"size": {"fixed": 10}, "color": {"fixed": "#2b6cb0"}},
+                    },
+                    "location": {
+                        "mode": "coords",
+                        "latitude": "clarion_latitude",
+                        "longitude": "clarion_longitude",
+                    },
+                }],
+            },
+        }); pid += 1
+        y += 8
+
     # ── Final row: KG entity catalog link card ──
     panels.append(_kg_link_panel(pid, x=0, y=y)); pid += 1
 

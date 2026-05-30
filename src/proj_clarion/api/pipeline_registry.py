@@ -210,16 +210,39 @@ def start_pipeline_from_phase(
 
 
 def cancel_pipeline(pipeline_id: str) -> bool:
-    """Cancel a pipeline running on THIS process. Pipelines orphaned by
-    a prior API restart can't be cancelled — they're already terminal
-    in the DB (reap_orphans marked them failed)."""
+    """Cancel a build. Returns True if we either signalled the live task
+    or flipped a still-running DB row to `cancelled`.
+
+    Two things happen, because signalling the task alone isn't enough: a
+    phase wedged in a synchronous call (e.g. a blocking LLM/HTTP request)
+    never reaches an `await`, so `task.cancel()` can't land and the UI
+    would spin forever. So we ALSO mark the DB row `cancelled` right away
+    and wake any SSE tail. The task (if it ever unblocks) sees the
+    CancelledError and re-writes the same terminal status — idempotent.
+    Orphaned pipelines from a prior process have no live task; flipping
+    the DB row still lets the UI converge."""
     live = _LIVE.get(pipeline_id)
-    if live is None or live.task is None:
-        return False
-    if live.task.done():
-        return False
-    live.task.cancel()
-    return True
+    signalled = False
+    if live is not None and live.task is not None and not live.task.done():
+        live.task.cancel()
+        signalled = True
+
+    flipped = False
+    with session_scope() as s:
+        row = _repo.get(s, pipeline_id)
+        if row is not None and row["status"] == "running":
+            _repo.update_status(
+                s, pipeline_id, "cancelled",
+                finished_at=datetime.now(timezone.utc),
+            )
+            flipped = True
+
+    # Wake the SSE tail so it re-reads the now-terminal status and closes,
+    # which triggers the client to reconcile to `cancelled`.
+    if live is not None:
+        live.new_event.set()
+
+    return signalled or flipped
 
 
 async def stream_pipeline(pipeline_id: str) -> AsyncIterator[dict[str, Any]]:

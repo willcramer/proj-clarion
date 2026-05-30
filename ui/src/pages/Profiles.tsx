@@ -1,15 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
-  ArrowLeft, MessageCircle, Send, Loader2, Trash2, Sparkles, Activity,
-  RefreshCw, ChevronRight, ClipboardList, Globe, Check,
+  ArrowLeft, Loader2, Trash2, Sparkles, Activity,
+  ChevronRight, ClipboardList, Globe, Check, Bot,
 } from "lucide-react";
 
 import {
-  listProfiles, getProfile, streamAgent, deleteProfile, listPipelines,
-  listPlans, extendProfile, getProfileAudit, acceptProfileClaim,
-  type ChatMessage,
+  listProfiles, getProfile, deleteProfile, listPipelines,
+  listPlans, acceptProfileClaim,
+  type PlanSummary,
 } from "@/lib/api";
 import { usePipeline } from "@/lib/PipelineContext";
 import { AddProfileModal } from "@/components/AddProfileModal";
@@ -18,7 +18,11 @@ import { Badge, reviewStateTone } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CrumbChip } from "@/components/CrumbChip";
+import { DemoSessionCard } from "@/components/DemoSessionCard";
 import { PlanTabs } from "@/components/plan/PlanTabs";
+import { Pagination } from "@/components/Pagination";
+import { ProfileKpiCard, deriveDemoStatus } from "@/components/ProfileKpiCard";
+import { useAssistant } from "@/lib/AssistantContext";
 import { cn } from "@/lib/cn";
 
 // Refetch every 5s while looking at the list so in-flight pipeline
@@ -34,6 +38,25 @@ export function ProfilesListPage() {
     queryFn: listProfiles,
     refetchInterval: PROFILES_REFETCH_MS,
   });
+  // Plans drive each card's status tone + stats (Processes / KG nodes
+  // when present, else Pain / Tech / Pending fall back). Same shape the
+  // Dashboard's DemoLibrary uses; we group client-side to avoid an
+  // N+1 fetch per card.
+  const plansAll = useQuery({
+    queryKey: ["plans"],
+    queryFn: () => listPlans(),
+    refetchInterval: 15_000,
+  });
+  const plansByProfile = useMemo(() => {
+    const m = new Map<string, PlanSummary[]>();
+    for (const p of plansAll.data ?? []) {
+      const arr = m.get(p.source_profile_id) ?? [];
+      arr.push(p);
+      m.set(p.source_profile_id, arr);
+    }
+    return m;
+  }, [plansAll.data]);
+
   const navigate = useNavigate();
   const pipeline = usePipeline();
   void pipeline;
@@ -41,13 +64,52 @@ export function ProfilesListPage() {
   // volume preset and starts the build directly (no /new bounce).
   const [addOpen, setAddOpen] = useState(false);
 
+  // Newest-first ordering matches the SE mental model: "what I just
+  // researched should be at the top, easy to find."
+  const ordered = useMemo(
+    () => [...(profiles.data ?? [])].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    ),
+    [profiles.data],
+  );
+
+  // Hybrid layout: top 6 newest as compact KPI cards (the "recent
+  // highlights" surface), then the full list as a paginated table
+  // (the canonical searchable surface). Cards give visual rhythm at
+  // a glance; the table gives sortable column data + pagination for
+  // when the library grows past a screen.
+  const HIGHLIGHTS_LIMIT = 6;
+  const highlights = ordered.slice(0, HIGHLIGHTS_LIMIT);
+  const showTable = ordered.length > HIGHLIGHTS_LIMIT;
+
+  // Pagination state for the table. Defaulting to 10 rows/page matches
+  // the rest of the app; users can dial up to 50.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  // Clamp page when row count changes (e.g. a delete drops us past the
+  // last page). Without this you can see an empty table page.
+  const totalPages = Math.max(1, Math.ceil(ordered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = ordered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  function navigateToProfile(p: typeof ordered[number]) {
+    if (p.pending && p.pipeline_id) {
+      navigate(`/pipelines?p=${p.pipeline_id}`);
+    } else {
+      navigate(`/profiles/${p.profile_id}`);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Profiles</h1>
           <p className="text-[var(--color-text-muted)] mt-1 text-sm">
-            CompanyProfiles produced by the research agent. Click into one to extend it.
+            CompanyProfiles produced by the research agent.{" "}
+            <span className="text-[var(--color-text-faint)] tabular-nums">
+              {ordered.length} total
+            </span>
           </p>
         </div>
         <Button
@@ -71,80 +133,161 @@ export function ProfilesListPage() {
         }}
       />
 
-      <Card>
-        {profiles.isLoading ? (
+      {profiles.isLoading ? (
+        <Card>
           <div className="p-8 text-center text-[var(--color-text-faint)]">Loading…</div>
-        ) : (profiles.data ?? []).length === 0 ? (
-          <div className="p-8 text-center text-[var(--color-text-muted)]">
-            No profiles yet. Run <code className="font-mono text-xs">just research &lt;url&gt;</code>.
+        </Card>
+      ) : ordered.length === 0 ? (
+        <Card>
+          <div className="p-12 text-center">
+            <Sparkles size={28} className="text-[var(--color-text-faint)] mx-auto mb-3" />
+            <div className="text-sm font-medium">No profiles yet</div>
+            <div className="text-xs text-[var(--color-text-muted)] mt-1 max-w-sm mx-auto">
+              Use <span className="font-mono text-[var(--color-accent)]">Add profile</span> above, or run{" "}
+              <code className="font-mono text-xs">just research &lt;url&gt;</code> from the terminal.
+            </div>
           </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider border-b border-[var(--color-border)]">
-              <tr>
-                <th className="text-left font-medium px-4 py-3">Profile</th>
-                <th className="text-left font-medium px-4 py-3">Company</th>
-                <th className="text-left font-medium px-4 py-3">Source</th>
-                <th className="text-right font-medium px-4 py-3">Pain signals</th>
-                <th className="text-right font-medium px-4 py-3">Tech signals</th>
-                <th className="text-right font-medium px-4 py-3">Synth flags</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(profiles.data ?? []).map((p) => {
-                // Pending rows are in-flight pipelines; click → /pipelines
-                // detail rather than /profiles/<pending-id> which 404s.
-                const onRowClick = p.pending && p.pipeline_id
-                  ? () => navigate(`/pipelines?p=${p.pipeline_id}`)
-                  : () => navigate(`/profiles/${p.profile_id}`);
-                return (
-                  <tr
-                    key={p.profile_id}
-                    onClick={onRowClick}
-                    className={cn(
-                      "border-b border-[var(--color-border)] last:border-0 cursor-pointer transition-colors",
-                      p.pending
-                        ? "bg-[var(--color-info)]/5 hover:bg-[var(--color-info)]/10"
-                        : "hover:bg-white/[0.02]",
-                    )}
-                  >
-                    <td className="px-4 py-3 font-mono text-xs">
-                      {p.pending ? (
-                        <span className="inline-flex items-center gap-1.5 text-[var(--color-info)]">
-                          <Loader2 size={11} className="animate-spin" />
-                          researching…
-                        </span>
-                      ) : (
-                        p.profile_id
-                      )}
-                    </td>
-                    <td className="px-4 py-3">{p.company_name ?? <span className="text-[var(--color-text-faint)]">, </span>}</td>
-                    <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] truncate max-w-[280px]">
-                      {p.primary_url}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.pain_signal_count}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? <span className="text-[var(--color-text-faint)]">, </span> : p.tech_signal_count}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {p.pending ? (
-                        <span className="text-[var(--color-text-faint)]">, </span>
-                      ) : p.synthesized_flag_count > 0 ? (
-                        <Badge tone="warning">{p.synthesized_flag_count}</Badge>
-                      ) : (
-                        <span className="text-[var(--color-text-faint)]">0</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </Card>
+        </Card>
+      ) : (
+        <>
+          {/* Highlights — top 6 newest as compact KPI cards. */}
+          <section aria-label="Recent profiles">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                Recent
+              </h2>
+              <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                {highlights.length} of {ordered.length}
+              </span>
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {highlights.map((p) => (
+                <ProfileKpiCard
+                  key={p.profile_id}
+                  profile={p}
+                  plans={plansByProfile.get(p.profile_id) ?? []}
+                  compact
+                  onClick={() => navigateToProfile(p)}
+                />
+              ))}
+            </div>
+          </section>
+
+          {/* Full list — table + pagination. Only renders when there are
+              more profiles than the highlights grid surfaces, so small
+              libraries don't see a redundant 4-row table. */}
+          {showTable && (
+            <section aria-label="All profiles">
+              <div className="flex items-baseline justify-between mb-3">
+                <h2 className="text-sm font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+                  All profiles
+                </h2>
+                <span className="text-[11px] text-[var(--color-text-faint)] font-mono tabular-nums">
+                  {ordered.length} total
+                </span>
+              </div>
+              <Card className="p-0 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-[var(--color-text-faint)] uppercase tracking-wider border-b border-[var(--color-border)]">
+                    <tr>
+                      <th className="text-left font-medium px-4 py-3">Company</th>
+                      <th className="text-left font-medium px-4 py-3">Source</th>
+                      <th className="text-left font-medium px-4 py-3">Status</th>
+                      <th className="text-right font-medium px-4 py-3">Pain</th>
+                      <th className="text-right font-medium px-4 py-3">Tech</th>
+                      <th className="text-right font-medium px-4 py-3">Synth</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((p) => {
+                      const status = deriveDemoStatus(p, plansByProfile.get(p.profile_id) ?? []);
+                      return (
+                        <tr
+                          key={p.profile_id}
+                          onClick={() => navigateToProfile(p)}
+                          className={cn(
+                            "border-b border-[var(--color-border)] last:border-0 cursor-pointer transition-colors",
+                            p.pending
+                              ? "bg-[var(--color-info)]/5 hover:bg-[var(--color-info)]/10"
+                              : "hover:bg-white/[0.02]",
+                          )}
+                        >
+                          <td className="px-4 py-3">
+                            {p.pending ? (
+                              <span className="inline-flex items-center gap-1.5 text-[var(--color-info)]">
+                                <Loader2 size={11} className="animate-spin" />
+                                researching…
+                              </span>
+                            ) : (
+                              <span className="font-medium">
+                                {p.company_name ?? (
+                                  <span className="text-[var(--color-text-faint)]">—</span>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-[var(--color-text-muted)] truncate max-w-[280px] font-mono">
+                            {hostOfUrl(p.primary_url)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <StatusChip status={status} />
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.pain_signal_count}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {p.pending ? <span className="text-[var(--color-text-faint)]">—</span> : p.tech_signal_count}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {p.pending ? (
+                              <span className="text-[var(--color-text-faint)]">—</span>
+                            ) : p.synthesized_flag_count > 0 ? (
+                              <Badge tone="warning">{p.synthesized_flag_count}</Badge>
+                            ) : (
+                              <span className="text-[var(--color-text-faint)]">0</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <Pagination
+                  page={safePage}
+                  pageSize={pageSize}
+                  total={ordered.length}
+                  onPageChange={setPage}
+                  onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
+                />
+              </Card>
+            </section>
+          )}
+        </>
+      )}
     </div>
+  );
+}
+
+// Inline status chip for table rows. Uses the same tone palette as
+// ProfileKpiCard but renders as a flat pill (no card chrome) since
+// the table doesn't have per-row accent. Tone strings stay in sync
+// with deriveDemoStatus.
+function StatusChip({ status }: { status: { tone: string; label: string } }) {
+  const cls = {
+    ready:       "border-[color:var(--color-accent)]/40 bg-[var(--color-accent-bg)] text-[var(--color-accent)]",
+    "in-review": "border-[color:var(--color-warning)]/40 bg-[var(--color-warning-bg)] text-[var(--color-warning)]",
+    draft:       "border-[var(--color-border)] bg-[var(--color-canvas-elev2)] text-[var(--color-text-muted)]",
+    researching: "border-[color:var(--color-info)]/40 bg-[var(--color-info-bg)] text-[var(--color-info)]",
+  }[status.tone] ?? "border-[var(--color-border)] text-[var(--color-text-muted)]";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center h-5 px-2 rounded-full text-[10px] font-mono uppercase tracking-wider border",
+        cls,
+      )}
+    >
+      {status.label}
+    </span>
   );
 }
 
@@ -251,9 +394,6 @@ export function ProfileDetailPage() {
   }
 
   const data = profile.data as ProfileShape | undefined;
-  const headerProfile = data?.company
-    ? { primary_url: data.company.primary_url, company_name: data.company.name ?? null }
-    : null;
 
   return (
     <div className="space-y-6">
@@ -282,7 +422,6 @@ export function ProfileDetailPage() {
           onBuildFromProfile={() => void buildFromProfile()}
           onViewLatestBuild={() => void viewLatestBuild()}
           onDelete={() => setConfirmDelete(true)}
-          headerProfile={headerProfile}
         />
       )}
 
@@ -404,7 +543,6 @@ type ProfileTabId =
 function ProfileDetailBody({
   profileId, data, profilePlans, latestPipeline,
   building, onBuildFromProfile, onViewLatestBuild, onDelete,
-  headerProfile,
 }: {
   profileId: string;
   data: ProfileShape;
@@ -414,7 +552,6 @@ function ProfileDetailBody({
   onBuildFromProfile: () => void;
   onViewLatestBuild: () => void;
   onDelete: () => void;
-  headerProfile: { primary_url?: string; company_name: string | null } | null;
 }) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<ProfileTabId>("overview");
@@ -462,16 +599,42 @@ function ProfileDetailBody({
         onJumpToPlans={() => navigate(`/plans?profile=${encodeURIComponent(profileId)}`)}
       />
 
-      {/* Hero grid: Company snapshot (1.4fr) + Profile stats (1fr).
-          Matches PlanDetailBody's KG | DemoSession+Stats hero. */}
+      {/* Hero grid: Company snapshot (1.4fr) + right column with
+          DemoSessionCard + Profile stats (1fr). Matches PlanDetailBody
+          shape so the SE sees the same demo-control surface whether
+          they're on a profile or a plan. The DemoSessionCard binds to
+          the most recent plan from this profile — most profiles have
+          one plan; when there are multiple, a small annotation marks
+          which one the controls are wired to. */}
       <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr] items-start">
         <CompanySnapshotPanel data={data} />
-        <ProfileContentsStats
-          channels={channelCount}
-          entities={entityCount}
-          pain={painCount}
-          tech={techCount}
-        />
+        <div className="space-y-5">
+          {profilePlans.length > 0 && (
+            <div>
+              {profilePlans.length > 1 && (
+                <div className="mb-2 text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-faint)]">
+                  Demo controls · plan{" "}
+                  <Link
+                    to={`/plans/${profilePlans[0].plan_id}`}
+                    className="text-[var(--color-text-muted)] hover:text-[var(--color-accent)] underline-offset-2 hover:underline"
+                  >
+                    {profilePlans[0].plan_id_short}
+                  </Link>
+                  <span className="ml-1 normal-case tracking-normal">
+                    (most recent of {profilePlans.length})
+                  </span>
+                </div>
+              )}
+              <DemoSessionCard planId={profilePlans[0].plan_id} />
+            </div>
+          )}
+          <ProfileContentsStats
+            channels={channelCount}
+            entities={entityCount}
+            pain={painCount}
+            tech={techCount}
+          />
+        </div>
       </div>
 
       <PlanTabs
@@ -487,7 +650,7 @@ function ProfileDetailBody({
         {activeTab === "claims"   && <ClaimsTab profileId={profileId} data={data} />}
         {activeTab === "related"  && <RelatedProfileContent profileId={profileId} />}
         {activeTab === "extend"   && (
-          <ExtendProfilePanel profileId={profileId} profile={headerProfile} />
+          <ExtendWithAssistantPanel profileId={profileId} />
         )}
         {activeTab === "raw"      && <RawJsonTab data={data} />}
       </div>
@@ -518,6 +681,7 @@ function ProfileHeader({
   onJumpToPlan: (planId: string) => void;
   onJumpToPlans: () => void;
 }) {
+  const assistant = useAssistant();
   const co  = data.company ?? {};
   const tax = data.industry_taxonomy ?? {};
   const companyName = co.name ?? "Unnamed company";
@@ -633,6 +797,18 @@ function ProfileHeader({
             </span>
           </Button>
         )}
+        {/* Entry into the Clarion assistant, scoped to this profile.
+            The assistant extends the profile's research, refines plans,
+            runs builds, and drives demos — the conversational path that
+            replaced the old in-page "Extend research" chat. */}
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => assistant.openAssistant({ scope: { profile_id: profileId } })}
+          title="Open the Clarion assistant scoped to this profile (⌘J)."
+        >
+          <Bot size={12} /> Refine with assistant
+        </Button>
         <Button
           variant="primary"
           size="sm"
@@ -1292,476 +1468,65 @@ function SectionCard({
 }
 
 
-/** Whether the most recent assistant turn added anything that would
- *  warrant a fresh plan + provision run. Used to surface the "Re-run
- *  plan" banner once additions exist that haven't been re-run yet.
+/** Entry point into the global Clarion assistant, scoped to this
+ *  profile. Replaces the old in-page ExtendProfilePanel chat: extending
+ *  a profile's research is now one of the things the assistant does (it
+ *  calls the extend_profile tool, then can re-run the plan so the new
+ *  entities reach the live demo), so the profile page points at the
+ *  assistant rather than carrying a second, divergent chat surface.
  *
- *  Cleared on the system "Started a re-run from the plan phase…" turn
- *  so the banner doesn't stick across multiple re-runs. */
-function hasPendingAdditions(history: Array<{
-  role: string;
-  additions?: Record<string, number>;
-}>): boolean {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const e = history[i];
-    if (e.role === "system" && /Started a re-run/.test((e as { content?: string }).content ?? "")) {
-      return false;
-    }
-    if (e.role === "assistant" && e.additions && Object.values(e.additions).some((n) => n > 0)) {
-      return true;
-    }
-  }
-  return false;
-}
+ *  Seeding a prompt prefills the assistant's compose box — the SE can
+ *  edit it before sending or clear it entirely. */
+function ExtendWithAssistantPanel({ profileId }: { profileId: string }) {
+  const assistant = useAssistant();
 
+  const EXAMPLES = [
+    "Add the industries they support",
+    "We're missing their EMEA region channels",
+    "Add their main competitors and recent acquisitions",
+  ];
 
-// ─── Extend research panel (Profiles only) ────────────────────────
-//
-// Same chat chrome as AgentChatPanel, but each user message is a
-// command the backend ACTUALLY APPLIES to the profile. The flow:
-//
-//   1. SE types what's missing or wrong.
-//   2. We POST /api/profiles/{id}/extend with the prompt.
-//   3. The agent returns a structured additions object; backend
-//      validates against the CompanyProfile schema, merges, saves.
-//   4. We append an assistant turn summarising what landed
-//      (counts per field), then invalidate the profile query so the
-//      page re-renders with the extended data.
-//
-// Plan-refinement and the original streaming "research/extend" advice
-// surface are unaffected; this is a new mutation surface specifically
-// for the "build → review → extend → review again" loop the SE uses.
-
-interface ExtendChatEntry {
-  role: "user" | "assistant" | "system";
-  content: string;
-  additions?: Record<string, number>;
-  /** Wall-clock when this entry landed, used for the timestamp pill
-   *  and so the assistant turn pairs naturally with the preceding
-   *  user turn in the audit-style readout. */
-  at: number;
-}
-
-/** localStorage key for per-profile extend history. We persist so the
- *  SE can leave the page (e.g. to look at a build) and come back to
- *  see what they asked the agent. The Profile's audit log will eventually
- *  carry this on the server too; until then localStorage is the
- *  durable copy. */
-function extendHistoryKey(profileId: string): string {
-  return `clarion.profile-extend.${profileId}`;
-}
-
-function loadExtendHistory(profileId: string): ExtendChatEntry[] {
-  try {
-    const raw = localStorage.getItem(extendHistoryKey(profileId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (e): e is ExtendChatEntry =>
-        e && typeof e.content === "string" && typeof e.at === "number"
-        && ["user", "assistant", "system"].includes(e.role),
-    );
-  } catch {
-    return [];
-  }
-}
-
-function saveExtendHistory(profileId: string, entries: ExtendChatEntry[]) {
-  try {
-    localStorage.setItem(extendHistoryKey(profileId), JSON.stringify(entries));
-  } catch {
-    // Quota exceeded / private mode: silently drop. The on-page state
-    // still works for the current session.
-  }
-}
-
-function ExtendProfilePanel({ profileId, profile }: {
-  profileId: string;
-  /** Source profile URL needed to start the re-run-plan pipeline. */
-  profile: { primary_url?: string; company_name?: string | null } | null;
-}) {
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const pipeline = usePipeline();
-  const [history, setHistory] = useState<ExtendChatEntry[]>([]);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [hasUnappliedExtends, setHasUnappliedExtends] = useState(false);
-
-  // Hydrate the chat on mount. Server-side audit log is the canonical
-  // source of truth (recoverable across browsers + machines); the
-  // localStorage copy is what made the chat feel "live" before audit
-  // shipped. We prefer the server when available and fall back to
-  // localStorage on network error — never blank the UI.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const rows = await getProfileAudit(profileId);
-        if (cancelled) return;
-        // Server returns newest-first; the chat reads oldest-first.
-        // Each audit row expands into user + assistant turns.
-        const entries: ExtendChatEntry[] = [];
-        for (const r of [...rows].reverse()) {
-          const at = new Date(r.timestamp).getTime();
-          entries.push({ role: "user", content: r.prompt, at });
-          entries.push({
-            role: "assistant",
-            content: r.summary,
-            additions: r.additions,
-            at: at + 1, // keeps assistant strictly after user on sort
-          });
-        }
-        setHistory(entries);
-        saveExtendHistory(profileId, entries);
-      } catch {
-        // Server unreachable / 404: fall back to whatever was cached.
-        const cached = loadExtendHistory(profileId);
-        if (!cancelled) setHistory(cached);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [profileId]);
-
-  // Persist on every history change so a quick navigation after a
-  // successful send doesn't lose the latest turn before the server
-  // round-trips.
-  useEffect(() => {
-    saveExtendHistory(profileId, history);
-    setHasUnappliedExtends(hasPendingAdditions(history));
-  }, [profileId, history]);
-
-  async function send() {
-    const trimmed = draft.trim();
-    if (!trimmed || busy) return;
-    setError(null);
-    setHistory((h) => [...h, { role: "user", content: trimmed, at: Date.now() }]);
-    setDraft("");
-    setBusy(true);
-    try {
-      const result = await extendProfile(profileId, trimmed);
-      setHistory((h) => [
-        ...h,
-        {
-          role: "assistant",
-          content: result.summary,
-          additions: result.additions,
-          at: Date.now(),
-        },
-      ]);
-      qc.invalidateQueries({ queryKey: ["profile", profileId] });
-      qc.invalidateQueries({ queryKey: ["profiles"] });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      setHistory((h) => [
-        ...h,
-        { role: "system", content: `Couldn't apply: ${msg}`, at: Date.now() },
-      ]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function rebuildPlan() {
-    if (!profile?.primary_url || busy) return;
-    setError(null);
-    try {
-      // Re-run from the plan phase: reuses the current profile, runs
-      // plan → approve → generate → provision → kg-publish so the
-      // additions land in Cloud. New pipeline_id; the user follows it
-      // on /new (PipelineRunView).
-      await pipeline.startFromPhase({
-        phase: "plan",
-        url: profile.primary_url,
-        company: profile.company_name ?? undefined,
-        days: 1,
-        profile_id: profileId,
-      });
-      // Mark the current extend block as applied so we don't keep
-      // showing the banner; a fresh extend re-trips it.
-      setHistory((h) => [
-        ...h,
-        {
-          role: "system",
-          content: "Started a re-run from the plan phase. Follow it on the build page.",
-          at: Date.now(),
-        },
-      ]);
-      navigate("/new");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(`Couldn't start re-run: ${msg}`);
-    }
-  }
-
-  function clearHistory() {
-    if (history.length === 0) return;
-    if (!window.confirm("Clear the extend chat for this profile?")) return;
-    setHistory([]);
+  function open(seed?: string) {
+    assistant.openAssistant({ scope: { profile_id: profileId }, seedPrompt: seed });
   }
 
   return (
-    <Card className="p-5 flex flex-col h-[680px]">
-      <div className="flex items-center justify-between gap-2 mb-1">
-        <div className="flex items-center gap-2">
-          <MessageCircle size={14} className="text-[var(--color-accent)]" />
-          <h2 className="text-sm font-medium">Extend research</h2>
+    <Card className="p-6">
+      <div className="flex items-start gap-3">
+        <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--color-accent-bg)] border border-[var(--color-accent-border)] shrink-0">
+          <Bot size={18} className="text-[var(--color-accent)]" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-medium text-[var(--color-text)] m-0">
+            Extend research with the assistant
+          </h2>
+          <p className="mt-1.5 text-sm text-[var(--color-text-muted)] leading-relaxed max-w-2xl">
+            Tell the Clarion assistant what&rsquo;s missing or wrong and it extends
+            this profile in place — additive only — then offers to re-run the plan so
+            the new entities reach your demo. The same conversation also refines plans,
+            runs builds, and drives demos, so the whole loop stays in one place.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button variant="primary" size="sm" onClick={() => open()}>
+              <Bot size={12} /> Open assistant
+            </Button>
+            <span className="text-[11px] text-[var(--color-text-faint)]">
+              or start from an example:
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {EXAMPLES.map((ex) => (
+              <button
+                key={ex}
+                type="button"
+                onClick={() => open(ex)}
+                className="text-left text-xs px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-border-strong)] transition-colors"
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
         </div>
-        {history.length > 0 && (
-          <button
-            type="button"
-            onClick={clearHistory}
-            className="text-[11px] text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)]"
-            title="Clear the local extend chat for this profile. Profile additions stay."
-          >
-            Clear
-          </button>
-        )}
-      </div>
-      <p className="text-xs text-[var(--color-text-faint)] mb-3">
-        Tell the agent what&rsquo;s missing or wrong. It will add to this profile and save.
-        Additive only, existing items aren&rsquo;t edited or removed.
-      </p>
-
-      {/* Banner: profile has extends since the last plan re-run. Live
-          demos won't see them in Cloud until plan + provision + KG
-          publish re-run with the extended profile. */}
-      {hasUnappliedExtends && (
-        <div className="mb-3 px-3 py-2.5 rounded-md border border-[color:var(--color-warning)]/30 bg-[var(--color-warning-bg)]">
-          <div className="text-xs text-[var(--color-text)] mb-2">
-            New entities are in this profile but the plan and Cloud
-            entities still reflect the old version.
-          </div>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void rebuildPlan()}
-            disabled={!profile?.primary_url || busy}
-            title={
-              profile?.primary_url
-                ? "Run plan, approve, generate, provision, and KG publish using the extended profile."
-                : "Profile URL unavailable; can't start a re-run."
-            }
-          >
-            <RefreshCw size={12} /> Re-run plan from this profile
-          </Button>
-        </div>
-      )}
-
-      <div className="flex-1 overflow-y-auto space-y-3 pr-2 scroll-smooth">
-        {history.length === 0 && (
-          <div className="text-[var(--color-text-faint)] text-sm py-4 italic">
-            Try: <span className="font-mono">&quot;Add the industries they support&quot;</span>{" "}
-            or <span className="font-mono">&quot;We're missing their EMEA region channels.&quot;</span>
-          </div>
-        )}
-        {history.map((m, i) => (
-          <div
-            key={i}
-            className={cn(
-              "rounded-md px-3 py-2 text-sm whitespace-pre-wrap",
-              m.role === "user"
-                ? "bg-[var(--color-accent-bg)] border border-[var(--color-accent-border)] text-[var(--color-text)]"
-                : m.role === "system"
-                  ? "bg-[var(--color-canvas-elev2)] border border-[var(--color-border)] text-[var(--color-text-muted)]"
-                  : "bg-white/[0.02] border border-[var(--color-border)] text-[var(--color-text)]",
-            )}
-          >
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-faint)]">
-                {m.role}
-              </span>
-              <span className="text-[10px] font-mono text-[var(--color-text-faint)] tabular-nums">
-                {formatChatTime(m.at)}
-              </span>
-            </div>
-            <div>{m.content}</div>
-            {m.role === "assistant" && m.additions && Object.keys(m.additions).length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {Object.entries(m.additions).map(([field, count]) => (
-                  <span
-                    key={field}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] bg-[var(--color-accent-bg)] text-[var(--color-accent)]"
-                  >
-                    +{count} {field.replace(/_/g, " ")}
-                  </span>
-                ))}
-              </div>
-            )}
-            {m.role === "assistant" && m.additions && Object.keys(m.additions).length === 0 && (
-              <div className="mt-2 text-[11px] text-[var(--color-text-faint)] italic">
-                No fields changed.
-              </div>
-            )}
-          </div>
-        ))}
-        {busy && (
-          <div className="rounded-md px-3 py-2 text-sm bg-white/[0.02] border border-[var(--color-border)] inline-flex items-center gap-2 text-[var(--color-text-muted)]">
-            <Loader2 size={12} className="animate-spin" /> Extending profile&hellip;
-          </div>
-        )}
-        {error && (
-          <div className="rounded-md px-3 py-2 text-sm border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 text-[var(--color-danger)]">
-            {error}
-          </div>
-        )}
-      </div>
-
-      <div className="flex gap-2 pt-3 border-t border-[var(--color-border)]">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          placeholder="What's missing? (⌘↩ to apply)"
-          rows={2}
-          className="flex-1 resize-none rounded-md bg-white/[0.02] border border-[var(--color-border)] px-3 py-2 text-sm placeholder:text-[var(--color-text-faint)] focus:border-[var(--color-accent)] focus:outline-none"
-        />
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => void send()}
-          disabled={!draft.trim() || busy}
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          Apply
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
-/** "10:32a" today, "May 12 · 10:32a" earlier. Keeps the timestamp pill
- *  compact while still letting the SE see when a turn happened after
- *  coming back from another page. */
-function formatChatTime(ts: number): string {
-  const d = new Date(ts);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear()
-    && d.getMonth() === today.getMonth()
-    && d.getDate() === today.getDate();
-  const hh = d.getHours();
-  const mm = d.getMinutes().toString().padStart(2, "0");
-  const am = hh < 12 ? "a" : "p";
-  const h12 = ((hh + 11) % 12) + 1;
-  const time = `${h12}:${mm}${am}`;
-  if (sameDay) return time;
-  const month = d.toLocaleString(undefined, { month: "short" });
-  return `${month} ${d.getDate()} · ${time}`;
-}
-
-
-// ─── Reusable streaming chat panel ─────────────────────────────────
-
-export function AgentChatPanel({
-  contextId,
-  endpoint,
-  title,
-  subtitle,
-}: {
-  contextId: string;
-  endpoint: "research/extend" | "plan/refine";
-  title: string;
-  subtitle: string;
-}) {
-  const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function send() {
-    const trimmed = draft.trim();
-    if (!trimmed || streaming) return;
-    setError(null);
-    const next: ChatMessage[] = [...history, { role: "user", content: trimmed }];
-    setHistory([...next, { role: "assistant", content: "" }]);
-    setDraft("");
-    setStreaming(true);
-    try {
-      await streamAgent(
-        endpoint,
-        contextId,
-        next,
-        (delta) => setHistory((h) => {
-          const out = h.slice();
-          const last = out[out.length - 1];
-          if (last && last.role === "assistant") {
-            out[out.length - 1] = { ...last, content: last.content + delta };
-          }
-          return out;
-        }),
-        () => setStreaming(false),
-        (err) => { setError(err); setStreaming(false); },
-      );
-    } catch (e) {
-      setError(String(e));
-      setStreaming(false);
-    }
-  }
-
-  return (
-    <Card className="p-5 flex flex-col h-[680px]">
-      <div className="flex items-center gap-2 mb-1">
-        <MessageCircle size={14} className="text-[var(--color-accent)]" />
-        <h2 className="text-sm font-medium">{title}</h2>
-      </div>
-      <p className="text-xs text-[var(--color-text-faint)] mb-4">{subtitle}</p>
-
-      <div className="flex-1 overflow-y-auto space-y-3 pr-2 scroll-smooth">
-        {history.length === 0 && (
-          <div className="text-[var(--color-text-faint)] text-sm py-4 italic">
-            Try something like: <span className="font-mono">"What channels are missing from this profile?"</span>
-          </div>
-        )}
-        {history.map((m, i) => (
-          <div
-            key={i}
-            className={cn(
-              "rounded-md px-3 py-2 text-sm whitespace-pre-wrap",
-              m.role === "user"
-                ? "bg-[var(--color-accent-bg)] border border-[var(--color-accent-border)] text-[var(--color-text)]"
-                : "bg-white/[0.02] border border-[var(--color-border)] text-[var(--color-text)]",
-            )}
-          >
-            <div className="text-[10px] uppercase tracking-wider mb-1 text-[var(--color-text-faint)]">
-              {m.role}
-            </div>
-            {m.content || (streaming && i === history.length - 1 ? <span className="inline-flex"><Loader2 size={12} className="animate-spin" /></span> : <span className="text-[var(--color-text-faint)]">…</span>)}
-          </div>
-        ))}
-        {error && (
-          <div className="rounded-md px-3 py-2 text-sm border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 text-[var(--color-danger)]">
-            {error}
-          </div>
-        )}
-      </div>
-
-      <div className="flex gap-2 pt-3 border-t border-[var(--color-border)]">
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          placeholder="Type a question for the agent…  (⌘↵ to send)"
-          rows={2}
-          className="flex-1 resize-none rounded-md bg-white/[0.02] border border-[var(--color-border)] px-3 py-2 text-sm placeholder:text-[var(--color-text-faint)] focus:border-[var(--color-accent)] focus:outline-none"
-          disabled={streaming}
-        />
-        <Button onClick={() => void send()} disabled={streaming || !draft.trim()} variant="primary">
-          {streaming ? <Loader2 size={14} className="animate-spin" /> : <><Send size={14} /> Send</>}
-        </Button>
       </div>
     </Card>
   );
