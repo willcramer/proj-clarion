@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from typing import Any
 
 import structlog
 
@@ -82,6 +83,37 @@ def init_telemetry() -> bool:
     else:
         tracer_provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
         backend = "console"
+
+    # Stamp gen_ai.conversation.id on every span started while an assistant
+    # conversation context is active (see llm_client._conversation_id_var).
+    # Grafana AI-Obs groups its Conversations view by this attribute on the
+    # generation spans — and there are two per call (our gen_ai.chat wrapper
+    # and OpenLIT's auto-instrumented span), so a processor is the only way
+    # to reliably tag both.
+    try:
+        from opentelemetry.sdk.trace import SpanProcessor
+
+        from proj_clarion.observability.llm_client import _conversation_id_var
+
+        class _ConversationStamp(SpanProcessor):
+            def on_start(self, span: Any, parent_context: Any = None) -> None:
+                cid = _conversation_id_var.get()
+                if cid:
+                    span.set_attribute("gen_ai.conversation.id", cid)
+
+            def on_end(self, span: Any) -> None:
+                pass
+
+            def shutdown(self) -> None:
+                pass
+
+            def force_flush(self, timeout_millis: int = 30000) -> bool:
+                return True
+
+        tracer_provider.add_span_processor(_ConversationStamp())
+    except Exception as exc:  # noqa: BLE001 — instrumentation must never break boot
+        _logger.warning("otel.conversation_stamp.skip", error=str(exc))
+
     trace.set_tracer_provider(tracer_provider)
 
     # --- Meter ---

@@ -654,6 +654,7 @@ def _stream_chat(
                         client, request,
                         agent_name="clarion.assistant",
                         prompt_template="clarion.assistant",
+                        conversation_id=str(conversation_id),
                     ) as stream:
                         for chunk in stream.text_stream:
                             iter_text += chunk

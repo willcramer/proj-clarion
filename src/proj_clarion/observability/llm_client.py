@@ -106,6 +106,13 @@ _prompt_template_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 _prompt_version_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "clarion_prompt_version", default=os.getenv("CLARION_PROMPT_VERSION", ""),
 )
+# Assistant conversation id. When set, the ConversationSpanProcessor stamps
+# gen_ai.conversation.id on every span started inside the block — which is
+# how Grafana AI-Obs groups generation spans (ours AND OpenLIT's) into a
+# conversation in the Conversations view.
+_conversation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "clarion_conversation_id", default=os.getenv("CLARION_CONVERSATION_ID", ""),
+)
 
 
 @contextlib.contextmanager
@@ -115,6 +122,7 @@ def pipeline_context(
     phase: str | None = None,
     prompt_template: str | None = None,
     prompt_version: str | None = None,
+    conversation_id: str | None = None,
 ) -> Iterator[None]:
     """Set Clarion pipeline context for the duration of the `with` block.
 
@@ -130,6 +138,8 @@ def pipeline_context(
         tokens.append(_prompt_template_var.set(prompt_template))
     if prompt_version is not None:
         tokens.append(_prompt_version_var.set(prompt_version))
+    if conversation_id is not None:
+        tokens.append(_conversation_id_var.set(conversation_id))
     try:
         yield
     finally:
@@ -483,6 +493,7 @@ def stream_anthropic(
     agent_name: str,
     prompt_template: str | None = None,
     prompt_version: str | None = None,
+    conversation_id: str = "",
 ) -> Iterator[Any]:
     """Wrap `anthropic_client.messages.stream(**request)` with span + TTFT.
 
@@ -510,10 +521,16 @@ def stream_anthropic(
     with tracer.start_as_current_span(f"gen_ai.chat {model}") as span:
         with pipeline_context(
             prompt_template=prompt_template, prompt_version=prompt_version,
+            conversation_id=conversation_id or None,
         ):
             _stamp_request_attrs(span, model, request)
             span.set_attribute("gen_ai.request.streaming", True)
             span.set_attribute("clarion.llm.call_id", call_id)
+            # Grafana AI-Obs groups the Conversations view by this attr on
+            # the generation span. Set it here for our span; the
+            # ConversationSpanProcessor covers OpenLIT's child span too.
+            if conversation_id:
+                span.set_attribute("gen_ai.conversation.id", conversation_id)
             started = time.monotonic()
             first_token_ms: int | None = None
             first_token_seen = False
