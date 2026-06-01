@@ -35,6 +35,7 @@ dependencies = [
     "sse-starlette>=3.4.2",
     "opentelemetry-instrumentation-system-metrics>=0.62b1",
     "opentelemetry-instrumentation-fastapi>=0.62b1",
+    "pyroscope-io>=1.0.10",
 ]
 
 [project.optional-dependencies]

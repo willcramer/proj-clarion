@@ -157,6 +157,34 @@ def init_telemetry() -> bool:
     except Exception as exc:  # noqa: BLE001 — instrumentation must never break boot
         _logger.info("otel.init.system_metrics.skip", error=str(exc)[:200])
 
+    # --- Logs (OTLP → Loki) ---
+    # The app runs on the host (not a container), so Docker log discovery
+    # can't see it — instead its structlog records flow through the stdlib
+    # root logger (see configure_logging) into this OTel LoggingHandler →
+    # OTLP → Loki, auto-correlated with the active trace. This is what makes
+    # the "zero Loki streams" gap go away for the app itself.
+    logger_provider = None
+    if has_otlp:
+        try:
+            from opentelemetry._logs import set_logger_provider
+            from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+            from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+            from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+            from proj_clarion.observability.otlp import otlp_logs_endpoint
+
+            logger_provider = LoggerProvider(resource=resource)
+            logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(OTLPLogExporter(endpoint=otlp_logs_endpoint()))
+            )
+            set_logger_provider(logger_provider)
+            logging.getLogger().addHandler(
+                LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+            )
+            _logger.info("otel.init.logs")
+        except Exception as exc:  # noqa: BLE001 — never break boot on logs export
+            _logger.info("otel.init.logs.skip", error=str(exc)[:200])
+
     # --- OpenLIT (auto-instrumentation; layered on top of our providers) ---
     try:
         import openlit
@@ -195,6 +223,13 @@ def init_telemetry() -> bool:
             meter_provider.shutdown()
         except Exception as exc:  # noqa: BLE001
             _logger.debug("otel.meter.shutdown.skip", error=str(exc)[:200])
+        # Logs: flush the queued OTLP log records before the interpreter dies.
+        if logger_provider is not None:
+            try:
+                logger_provider.force_flush(timeout_millis=5000)
+                logger_provider.shutdown()
+            except Exception as exc:  # noqa: BLE001
+                _logger.debug("otel.logs.shutdown.skip", error=str(exc)[:200])
         # Sigil: flush queued records, then close.
         shutdown_sigil()
 
@@ -274,24 +309,88 @@ def shutdown_sigil() -> None:
         _sigil_client = None
 
 
-def configure_logging() -> None:
-    """Plain structlog config — JSON logs in production, console-friendly locally."""
-    level = os.getenv("LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(level=level, format="%(message)s")
+def _add_trace_context(_logger: Any, _method: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+    """structlog processor: stamp the active trace_id/span_id onto every log
+    line so logs correlate with traces in Grafana (Logs ↔ Traces, RCA). The
+    OTel LoggingHandler also attaches trace context to OTLP log records; this
+    keeps the stdout JSON correlated too."""
+    try:
+        from opentelemetry import trace as _t
 
+        ctx = _t.get_current_span().get_span_context()
+        if ctx.is_valid:
+            event_dict["trace_id"] = format(ctx.trace_id, "032x")
+            event_dict["span_id"] = format(ctx.span_id, "016x")
+    except Exception:  # noqa: BLE001
+        pass
+    return event_dict
+
+
+def configure_logging() -> None:
+    """structlog routed through stdlib logging, so app logs flow to BOTH the
+    console AND the OTel LoggingHandler (→ OTLP → Loki, trace-correlated;
+    handler is attached by init_telemetry). JSON in prod, console locally."""
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
     use_json = os.getenv("LOG_FORMAT", "console") == "json"
-    processors = [
+
+    # Processors shared by structlog-native and stdlib-foreign records.
+    shared: list[Any] = [
+        structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.add_log_level,
+        _add_trace_context,
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
-    processors.append(
-        structlog.processors.JSONRenderer() if use_json else structlog.dev.ConsoleRenderer()
-    )
+
     structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, level)),
+        processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
+
+    renderer: Any = (
+        structlog.processors.JSONRenderer() if use_json
+        else structlog.dev.ConsoleRenderer(colors=True)
+    )
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[structlog.stdlib.ProcessorFormatter.remove_processors_meta, renderer],
+        foreign_pre_chain=shared,
+    )
+
+    # Reset the root logger to one console handler with our formatter.
+    # init_telemetry() adds the OTel LoggingHandler alongside it.
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    root.addHandler(console)
+    root.setLevel(getattr(logging, level, logging.INFO))
+
+
+def init_profiling() -> None:
+    """Opt-in continuous profiling (Pyroscope). OFF unless PYROSCOPE_ENABLED
+    is truthy — profiling adds CPU overhead, so it's a deliberate switch.
+
+    Pushes pprof to the local clarion-obs Alloy receiver
+    (PYROSCOPE_SERVER_ADDRESS, default http://localhost:4040), which forwards
+    to Grafana Cloud Profiles. Tagged env=clarion so it lines up with the
+    app's traces/metrics/logs in the RCA workbench."""
+    if os.getenv("PYROSCOPE_ENABLED", "").strip().lower() not in ("1", "true", "yes"):
+        return
+    try:
+        import pyroscope
+
+        pyroscope.configure(
+            application_name="proj-clarion",
+            server_address=os.getenv("PYROSCOPE_SERVER_ADDRESS", "http://localhost:4040"),
+            tags={
+                "env":     os.getenv("CLARION_ASSERTS_ENV", "clarion"),
+                "service": "proj-clarion",
+            },
+        )
+        _logger.info("otel.init.pyroscope")
+    except Exception as exc:  # noqa: BLE001 — profiling must never break boot
+        _logger.info("otel.init.pyroscope.skip", error=str(exc)[:200])

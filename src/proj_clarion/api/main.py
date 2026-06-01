@@ -15,7 +15,7 @@ from proj_clarion.api.routes import (
 )
 from proj_clarion.api.routes.demo import reap_expired_demo_sessions
 from proj_clarion.api.setup import is_setup_complete
-from proj_clarion.observability import configure_logging, init_telemetry
+from proj_clarion.observability import configure_logging, init_profiling, init_telemetry
 
 
 # Routes that must work even when setup is incomplete. Anything outside
@@ -47,6 +47,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     load_dotenv(override=True)
     configure_logging()
     init_telemetry()
+    init_profiling()  # opt-in (PYROSCOPE_ENABLED); no-op otherwise
 
     # Reap orphaned pipelines from a prior API process. Any DB row still
     # in 'running' state can't have a live asyncio task — its task died

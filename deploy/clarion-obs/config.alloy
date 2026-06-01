@@ -112,3 +112,74 @@ prometheus.scrape "host" {
     job_name        = "integrations/node_exporter"
     scrape_interval = "30s"
 }
+
+// ── 4. Container metrics (cAdvisor → Mimir) ──────────────────
+// cAdvisor sidecar (see docker-compose) exposes per-container CPU /
+// memory / restart / fs metrics → the Docker workloads (Postgres, the
+// Alloy collectors) become Container entities in Asserts at env=clarion.
+
+prometheus.scrape "cadvisor" {
+    targets         = [{"__address__" = "cadvisor:8080"}]
+    forward_to      = [prometheus.remote_write.gc.receiver]
+    job_name        = "integrations/cadvisor"
+    scrape_interval = "30s"
+}
+
+// ── 5. Container logs (dockerized services → Loki) ───────────
+// Tails the clarion-* container stdout (Postgres errors/slow queries, the
+// PDC agent, etc.) into Loki at env=clarion. The FastAPI app runs on the
+// host, not a container — its logs reach Loki via OTLP instead (see
+// src/proj_clarion/observability configure_logging + the OTel log handler).
+
+discovery.docker "clarion" {
+    host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "clarion" {
+    targets = discovery.docker.clarion.targets
+
+    // Keep only clarion-* containers.
+    rule {
+        source_labels = ["__meta_docker_container_name"]
+        regex         = "/(clarion-.*)"
+        action        = "keep"
+    }
+    // Container name (minus the leading slash) → service_name label.
+    rule {
+        source_labels = ["__meta_docker_container_name"]
+        regex         = "/(clarion-.*)"
+        target_label  = "service_name"
+    }
+}
+
+loki.source.docker "clarion" {
+    host       = "unix:///var/run/docker.sock"
+    targets    = discovery.relabel.clarion.output
+    forward_to = [loki.write.gc.receiver]
+}
+
+// ── 6. Continuous profiles (Pyroscope) ───────────────────────
+// The app's pyroscope SDK pushes pprof to this local receiver; Alloy
+// forwards to Grafana Cloud Profiles. Keeps Pyroscope creds out of the app.
+
+pyroscope.receive_http "in" {
+    http {
+        listen_address = "0.0.0.0"
+        listen_port    = 4040
+    }
+    forward_to = [pyroscope.write.gc.receiver]
+}
+
+pyroscope.write "gc" {
+    endpoint {
+        url = env("GRAFANA_CLOUD_PYROSCOPE_URL")  // .../pyroscope (or the GC Profiles push URL)
+        basic_auth {
+            username = env("GRAFANA_CLOUD_PYROSCOPE_USERNAME")  // numeric instance id
+            password = env("GRAFANA_CLOUD_API_TOKEN")
+        }
+    }
+    external_labels = {
+        env     = "clarion",
+        cluster = "clarion",
+    }
+}

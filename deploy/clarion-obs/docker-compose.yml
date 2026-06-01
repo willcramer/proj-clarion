@@ -32,6 +32,7 @@ services:
       - /etc/alloy/config.alloy
     ports:
       - "127.0.0.1:12346:12346"   # Alloy debug UI
+      - "127.0.0.1:4040:4040"     # Pyroscope receiver (app pushes profiles here)
     volumes:
       - ./config.alloy:/etc/alloy/config.alloy:ro
       - clarion_obs_data:/var/lib/alloy/data
@@ -39,6 +40,8 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro,rslave
+      # Container log discovery (clarion-* container stdout → Loki).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"   # reach host-published Postgres on Linux
     healthcheck:
@@ -47,6 +50,23 @@ services:
       timeout: 3s
       retries: 4
       start_period: 10s
+
+  # Per-container CPU/memory/restart/fs metrics → Alloy scrapes cadvisor:8080.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: clarion-obs-cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    # No host port needed — Alloy reaches it on the compose network as
+    # cadvisor:8080. Expose locally only if you want the cAdvisor UI:
+    # ports: ["127.0.0.1:8089:8080"]
 
 volumes:
   clarion_obs_data:
