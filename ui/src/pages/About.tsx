@@ -18,10 +18,18 @@
  *
  * Lives at /about (also linked from the UserMenu and the mobile nav drawer).
  */
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import {
   Boxes, Database, Activity, Sparkles, ClipboardList,
   Network, Rocket, GitBranch, Eye, BookOpen,
+  Globe, Layers, Zap, Cpu, Gauge, LayoutGrid, Bell, FlaskConical, Maximize2, X,
+  type LucideIcon,
 } from "lucide-react";
+import type { IconType } from "react-icons";
+import {
+  SiReact, SiFastapi, SiAnthropic, SiClaude, SiPostgresql,
+  SiOpentelemetry, SiGrafana,
+} from "react-icons/si";
 import { Link } from "react-router-dom";
 
 import { Card } from "@/components/Card";
@@ -129,197 +137,333 @@ function ProjectPitchCard() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// 2. Architecture diagram — SVG block-and-arrow
+// 2. Architecture diagram — faithful port of the Claude-design runtime
+//    architecture export. Node cards (HTML, absolutely positioned) are
+//    layered over an SVG edge/zone canvas; the whole stage scales to fit
+//    its container (width AND a height cap, so it fits one viewport).
+//    "Expand" opens a fullscreen view. Generic left-square icons are
+//    lucide; the inline brand mark beside each name is a Simple Icons
+//    logo (react-icons), rendered in a flex row so Tailwind's
+//    `svg{display:block}` preflight can't drop it onto its own line.
+//    All colours are theme tokens so it re-themes light/dark.
 // ──────────────────────────────────────────────────────────────────
 
 function ArchitectureDiagramCard() {
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded]);
+
   return (
     <Card className="p-6">
-      <SectionHeader icon={Network} title="Runtime architecture" />
-      <p className="text-xs text-[var(--color-text-muted)] mt-2 max-w-3xl">
-        FastAPI backend, React 19 UI, Postgres for persistence. Three external
-        cloud-shaped destinations: <strong>Anthropic</strong> for LLM calls,
-        <strong> Grafana Cloud</strong> as the obs target, <strong>Grafana
-        Sigil</strong> for AI-observability of the LLM calls themselves.
-      </p>
-      <div className="mt-5 overflow-x-auto">
-        <ArchitectureSVG />
+      <div className="flex items-start justify-between gap-3">
+        <SectionHeader icon={Network} title="Runtime architecture" />
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] px-2.5 py-1 text-xs font-medium text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-accent-border)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]"
+        >
+          <Maximize2 size={12} /> Expand
+        </button>
       </div>
+      <p className="text-xs text-[var(--color-text-muted)] mt-2 max-w-3xl leading-relaxed">
+        FastAPI backend, React 19 UI, Postgres for persistence. Three external
+        cloud-shaped destinations: <strong>Anthropic</strong> for LLM calls,{" "}
+        <strong>Grafana Cloud</strong> as the observability target, and{" "}
+        <strong>Grafana Sigil</strong> for AI-observability of the LLM calls
+        themselves.
+      </p>
+      <ArchLegend />
+      <RuntimeArchitecture maxHeight={440} />
+
+      {expanded && (
+        <div
+          className="fixed inset-0 z-[100] flex flex-col bg-[var(--color-canvas)]"
+          onClick={() => setExpanded(false)}
+        >
+          <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+            <span className="text-sm font-medium text-[var(--color-text)]">
+              Runtime architecture
+            </span>
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] px-2.5 py-1 text-xs font-medium text-[var(--color-text)] transition-colors hover:border-[var(--color-accent-border)] hover:bg-[var(--color-accent-bg)] hover:text-[var(--color-accent)]"
+            >
+              <X size={13} /> Close
+            </button>
+          </div>
+          <div className="flex flex-1 flex-col justify-center overflow-auto px-6 pb-6" onClick={(e) => e.stopPropagation()}>
+            <RuntimeArchitecture maxHeight={typeof window !== "undefined" ? window.innerHeight - 116 : 760} />
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
 
-/** SVG block diagram — no external lib, all SCSS-token colours so it
- *  re-themes light/dark automatically. Wide enough that on mobile it
- *  scrolls horizontally rather than cramping. */
-function ArchitectureSVG() {
-  return (
-    <svg
-      viewBox="0 0 980 460"
-      className="w-full h-auto"
-      style={{ minWidth: 880 }}
-      aria-label="Proj Clarion architecture block diagram"
-    >
-      <defs>
-        <marker
-          id="arrow"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth="6"
-          markerHeight="6"
-          orient="auto-start-reverse"
-        >
-          <path d="M0,0 L10,5 L0,10 z" fill="var(--color-text-faint)" />
-        </marker>
-        <marker
-          id="arrow-accent"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth="6"
-          markerHeight="6"
-          orient="auto-start-reverse"
-        >
-          <path d="M0,0 L10,5 L0,10 z" fill="var(--color-accent)" />
-        </marker>
-      </defs>
+const ARCH_W = 1340;
+const ARCH_H = 950;
 
-      {/* SE-actor */}
-      <Block x={20}  y={30}  w={120} h={56} label="SE / Customer" sub="browser" tone="accent" />
+const ARCH_C = {
+  info: "var(--color-info)",
+  accent: "var(--color-accent)",
+  live: "var(--color-live)",
+  amber: "var(--color-warning)",
+  grafana: "var(--color-grafana)",
+} as const;
 
-      {/* UI tier */}
-      <Block x={180} y={30}  w={160} h={56} label="React 19 + Vite UI" sub="tokens · tabs · stepper" tone="info" />
-
-      {/* API tier */}
-      <Block x={380} y={30}  w={180} h={56} label="FastAPI orchestrator" sub="/api/* · SSE · session_scope" tone="info" />
-
-      {/* External agents row (LLM / Web / SEC etc.) */}
-      <Block x={620} y={20}  w={170} h={48} label="Anthropic SDK" sub="opus + haiku · prompt caching" tone="grafana" />
-      <Block x={620} y={78}  w={170} h={48} label="External sources" sub="EDGAR / GH / Greenhouse / Wikidata" tone="signal" />
-
-      {/* Storage tier */}
-      <Block x={380} y={140} w={180} h={56} label="Postgres" sub="profiles · plans · pipelines · KG" tone="success" />
-
-      {/* Emitter */}
-      <Block x={620} y={140} w={170} h={56} label="Entity emitter" sub="OTel metrics · logs · traces" tone="live" />
-
-      {/* Clarion Assistant — the global agentic chat front-door. Same
-          Anthropic SDK + tool loop as the pipeline; emits its own
-          conversation / turn / tool spans to Grafana Cloud. */}
-      <Block x={180} y={150} w={170} h={56} label="Clarion Assistant" sub="agentic chat · tools · approval" tone="accent" />
-
-      {/* Grafana Cloud row */}
-      <Block x={20}  y={260} w={150} h={56} label="Grafana Cloud" sub="Mimir · Loki · Tempo" tone="grafana" />
-      <Block x={200} y={260} w={150} h={56} label="Grafana Asserts" sub="Knowledge graph" tone="grafana" />
-      <Block x={380} y={260} w={150} h={56} label="Grafana dashboards" sub="Provisioned per plan" tone="grafana" />
-      <Block x={560} y={260} w={150} h={56} label="Grafana alerts" sub="Provisioned per plan" tone="grafana" />
-
-      {/* Sigil */}
-      <Block x={740} y={260} w={210} h={56} label="Grafana Sigil (AI Obs)" sub="Generations · trace tree · cost" tone="accent" />
-
-      {/* Demo session */}
-      <Block x={380} y={380} w={400} h={56} label="Live demo session" sub="customer sees real telemetry flowing into Grafana Cloud" tone="live" />
-
-      {/* Arrows */}
-      <Arrow from={[140, 58]} to={[180, 58]} />
-      <Arrow from={[340, 58]} to={[380, 58]} />
-      <Arrow from={[560, 58]} to={[620, 44]} />
-      <Arrow from={[560, 58]} to={[620, 102]} />
-      <Arrow from={[470, 86]} to={[470, 140]} accent />
-      <Arrow from={[560, 168]} to={[620, 168]} />
-      <Arrow from={[705, 196]} to={[95, 260]} accent />
-      <Arrow from={[705, 196]} to={[275, 260]} accent />
-      <Arrow from={[470, 196]} to={[455, 260]} />
-      <Arrow from={[470, 196]} to={[635, 260]} />
-      <Arrow from={[705, 68]} to={[845, 260]} accent />
-      <Arrow from={[95, 316]} to={[490, 380]} accent />
-      <Arrow from={[635, 316]} to={[580, 380]} accent />
-
-      {/* Clarion Assistant wiring: UI opens it, it calls Claude + tools,
-          persists to Postgres, and ships conversation/tool spans to Tempo. */}
-      <Arrow from={[260, 86]}  to={[260, 150]} accent />
-      <Arrow from={[350, 162]} to={[620, 46]}  accent />
-      <Arrow from={[350, 178]} to={[380, 178]} />
-      <Arrow from={[200, 206]} to={[95, 260]}  accent />
-
-      {/* Section labels — light grey, just visual orientation */}
-      <text x={20}  y={20} fontSize="10" fill="var(--color-text-faint)" fontFamily="var(--font-mono)" letterSpacing="0.08em">
-        CLIENT
-      </text>
-      <text x={380} y={130} fontSize="10" fill="var(--color-text-faint)" fontFamily="var(--font-mono)" letterSpacing="0.08em">
-        SERVER + STORAGE
-      </text>
-      <text x={20}  y={250} fontSize="10" fill="var(--color-text-faint)" fontFamily="var(--font-mono)" letterSpacing="0.08em">
-        GRAFANA CLOUD
-      </text>
-      <text x={380} y={370} fontSize="10" fill="var(--color-text-faint)" fontFamily="var(--font-mono)" letterSpacing="0.08em">
-        OUTPUT
-      </text>
-    </svg>
-  );
-}
-
-type Tone = "accent" | "info" | "success" | "live" | "signal" | "grafana";
-
-const TONE_COLOURS: Record<Tone, { fill: string; stroke: string; text: string }> = {
-  accent:  { fill: "var(--color-accent-bg)",   stroke: "var(--color-accent-border)",       text: "var(--color-accent)"  },
-  info:    { fill: "var(--color-info-bg)",     stroke: "var(--color-info)",                text: "var(--color-info)"    },
-  success: { fill: "var(--color-success-bg)",  stroke: "var(--color-success)",             text: "var(--color-success)" },
-  live:    { fill: "var(--color-live-bg)",     stroke: "var(--color-live)",                text: "var(--color-live)"    },
-  signal:  { fill: "var(--color-signal-bg)",   stroke: "var(--color-signal)",              text: "var(--color-signal)"  },
-  grafana: { fill: "var(--color-grafana-bg)",  stroke: "var(--color-grafana-border)",      text: "var(--color-grafana)" },
+type ArchNode = {
+  x: number; y: number; w: number; h: number; c: string;
+  Icon: LucideIcon; t: string; s: string; brand?: IconType; big?: boolean;
 };
 
-function Block({
-  x, y, w, h, label, sub, tone,
-}: {
-  x: number; y: number; w: number; h: number;
-  label: string; sub?: string; tone: Tone;
-}) {
-  const c = TONE_COLOURS[tone];
+const ARCH_NODES: ArchNode[] = [
+  { x: 60,   y: 110, w: 210, h: 78, c: ARCH_C.live,    Icon: Globe,        t: "SE / Customer",     s: "browser" },
+  { x: 330,  y: 110, w: 230, h: 78, c: ARCH_C.info,    Icon: Layers,       t: "React + Vite",      s: "React 19 · Tailwind 4",          brand: SiReact },
+  { x: 330,  y: 265, w: 250, h: 78, c: ARCH_C.accent,  Icon: Sparkles,     t: "Clarion Assistant", s: "agentic chat · tools",           brand: SiClaude },
+  { x: 620,  y: 265, w: 250, h: 78, c: ARCH_C.info,    Icon: Zap,          t: "FastAPI",           s: "Python 3.11 · SSE",              brand: SiFastapi },
+  { x: 330,  y: 440, w: 250, h: 78, c: ARCH_C.accent,  Icon: Activity,     t: "Entity emitter",    s: "OTel SDK · OpenLIT",             brand: SiOpentelemetry },
+  { x: 620,  y: 440, w: 250, h: 78, c: ARCH_C.accent,  Icon: Database,     t: "PostgreSQL 16",     s: "plans · pipelines · KG",     brand: SiPostgresql },
+  { x: 1010, y: 110, w: 280, h: 78, c: ARCH_C.amber,   Icon: Cpu,          t: "Anthropic SDK",     s: "opus-4 · haiku-4",               brand: SiAnthropic },
+  { x: 1010, y: 265, w: 280, h: 78, c: ARCH_C.info,    Icon: Globe,        t: "External sources",  s: "EDGAR · GitHub · Wikidata" },
+  { x: 60,   y: 620, w: 230, h: 82, c: ARCH_C.grafana, Icon: Gauge,        t: "Grafana Cloud",     s: "Mimir · Loki · Tempo",       brand: SiGrafana },
+  { x: 300,  y: 620, w: 230, h: 82, c: ARCH_C.grafana, Icon: Network,      t: "Asserts",           s: "knowledge graph",                     brand: SiGrafana },
+  { x: 540,  y: 620, w: 230, h: 82, c: ARCH_C.grafana, Icon: LayoutGrid,   t: "Dashboards",        s: "per plan",                            brand: SiGrafana },
+  { x: 780,  y: 620, w: 230, h: 82, c: ARCH_C.grafana, Icon: Bell,         t: "Alerts",            s: "per plan",                            brand: SiGrafana },
+  { x: 1020, y: 620, w: 270, h: 82, c: ARCH_C.grafana, Icon: Eye,          t: "Sigil — AI Obs.", s: "generations · trace · cost", brand: SiGrafana },
+  { x: 380,  y: 820, w: 580, h: 96, c: ARCH_C.accent,  Icon: FlaskConical, t: "Live demo session", s: "customer sees real telemetry in Grafana Cloud", big: true },
+];
+
+type ArchEdge = { pts: [number, number][]; style: "solid" | "dash"; label?: string; at?: [number, number] };
+
+const ARCH_EDGES: ArchEdge[] = [
+  { pts: [[270,149],[330,149]], style: "dash" },
+  { pts: [[468,188],[468,226],[720,226],[720,265]], style: "dash" },
+  { pts: [[399,188],[399,242],[455,242],[455,265]], style: "solid", label: "chat", at: [399,253] },
+  { pts: [[542,265],[542,212],[1150,212],[1150,188]], style: "solid", label: "LLM", at: [860,212] },
+  { pts: [[870,300],[940,300],[940,149],[1010,149]], style: "dash", label: "research · plan", at: [940,237] },
+  { pts: [[870,325],[960,325],[960,304],[1010,304]], style: "dash" },
+  { pts: [[745,343],[745,440]], style: "solid", label: "persist", at: [745,392] },
+  { pts: [[620,479],[580,479]], style: "dash", label: "read plan", at: [600,479] },
+  { pts: [[430,518],[430,575],[175,575],[175,620]], style: "solid", label: "telemetry", at: [300,575] },
+  { pts: [[700,518],[700,560],[415,560],[415,620]], style: "dash" },
+  { pts: [[745,518],[745,588],[655,588],[655,620]], style: "dash", label: "provision", at: [700,601] },
+  { pts: [[790,518],[790,572],[895,572],[895,620]], style: "dash" },
+  { pts: [[1290,149],[1316,149],[1316,661],[1290,661]], style: "solid", label: "spans · cost", at: [1316,405] },
+  { pts: [[175,702],[175,762],[500,762],[500,820]], style: "solid" },
+  { pts: [[895,702],[895,772],[845,772],[845,820]], style: "solid" },
+];
+
+type ArchZone = { x: number; y: number; w: number; h: number; label: string; lx: number; ly: number; tint: string };
+
+const ARCH_ZONES: ArchZone[] = [
+  { x: 300, y: 88,  w: 600,  h: 478, label: "Clarion · app", lx: 314,  ly: 92,  tint: "var(--color-info)" },
+  { x: 986, y: 86,  w: 322,  h: 262, label: "External",          lx: 1000, ly: 92,  tint: "var(--color-warning)" },
+  { x: 40,  y: 596, w: 1268, h: 130, label: "Grafana Cloud",     lx: 54,   ly: 602, tint: "var(--color-grafana)" },
+];
+
+const ARCH_BANDS: { t: string; x: number; y: number }[] = [
+  { t: "CLIENT", x: 60,  y: 90 },
+  { t: "OUTPUT", x: 380, y: 800 },
+];
+
+/** Rounded orthogonal path through waypoints (quadratic corners). */
+function archPath(pts: [number, number][], r = 15): string {
+  if (pts.length < 2) return "";
+  const P = pts.map((p) => ({ x: p[0], y: p[1] }));
+  let d = `M ${P[0].x} ${P[0].y}`;
+  for (let i = 1; i < P.length - 1; i++) {
+    const p0 = P[i - 1], p1 = P[i], p2 = P[i + 1];
+    const v1 = { x: p1.x - p0.x, y: p1.y - p0.y }, l1 = Math.hypot(v1.x, v1.y) || 1;
+    const v2 = { x: p2.x - p1.x, y: p2.y - p1.y }, l2 = Math.hypot(v2.x, v2.y) || 1;
+    const rr = Math.min(r, l1 / 2, l2 / 2);
+    const a = { x: p1.x - (v1.x / l1) * rr, y: p1.y - (v1.y / l1) * rr };
+    const b = { x: p1.x + (v2.x / l2) * rr, y: p1.y + (v2.y / l2) * rr };
+    d += ` L ${a.x} ${a.y} Q ${p1.x} ${p1.y} ${b.x} ${b.y}`;
+  }
+  const last = P[P.length - 1];
+  d += ` L ${last.x} ${last.y}`;
+  return d;
+}
+
+function ArchLegend() {
+  const swatch = (v: string): CSSProperties => ({
+    width: 11, height: 11, borderRadius: 3, display: "inline-block",
+    background: `color-mix(in srgb, ${v} 60%, transparent)`,
+  });
   return (
-    <g>
-      <rect
-        x={x} y={y} width={w} height={h} rx={10}
-        fill={c.fill} stroke={c.stroke} strokeWidth={1}
-      />
-      <text
-        x={x + w / 2} y={y + (sub ? 22 : h / 2 + 4)}
-        textAnchor="middle"
-        fontSize="12.5"
-        fontWeight="500"
-        fill={c.text}
-      >
-        {label}
-      </text>
-      {sub && (
-        <text
-          x={x + w / 2} y={y + 40}
-          textAnchor="middle"
-          fontSize="10"
-          fontFamily="var(--font-mono)"
-          fill="var(--color-text-muted)"
-        >
-          {sub}
-        </text>
-      )}
-    </g>
+    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-[var(--color-text-muted)]">
+      <span className="inline-flex items-center gap-2">
+        <svg width="34" height="10"><line x1="2" y1="5" x2="32" y2="5" stroke="var(--color-accent)" strokeWidth="2.5" /></svg>
+        Data &amp; telemetry flow
+      </span>
+      <span className="inline-flex items-center gap-2">
+        <svg width="34" height="10"><line x1="2" y1="5" x2="32" y2="5" stroke="var(--color-text-faint)" strokeWidth="2.5" strokeDasharray="5 4" /></svg>
+        Request / read
+      </span>
+      <span className="inline-flex items-center gap-2"><span style={swatch("var(--color-info)")} /> App tier</span>
+      <span className="inline-flex items-center gap-2"><span style={swatch("var(--color-accent)")} /> Clarion services</span>
+      <span className="inline-flex items-center gap-2"><span style={swatch("var(--color-grafana)")} /> Grafana Cloud</span>
+    </div>
   );
 }
 
-function Arrow({
-  from, to, accent,
-}: { from: [number, number]; to: [number, number]; accent?: boolean }) {
+/** Node cards layered over the SVG edge/zone canvas, scaled to fit both
+ *  the container width and an optional height cap. Labels render last so
+ *  they sit on top of node cards (edge chips occlude borders cleanly). */
+function RuntimeArchitecture({ maxHeight }: { maxHeight?: number }) {
+  const scalerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const scaler = scalerRef.current;
+    const stage = stageRef.current;
+    if (!scaler || !stage) return;
+    const fit = () => {
+      const availW = scaler.clientWidth;
+      let s = availW / ARCH_W;
+      if (maxHeight) s = Math.min(s, maxHeight / ARCH_H);
+      s = Math.min(s, 1);
+      const usedW = ARCH_W * s;
+      stage.style.transform = `scale(${s})`;
+      stage.style.left = `${Math.max(0, (availW - usedW) / 2)}px`;
+      scaler.style.height = `${ARCH_H * s}px`;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(scaler);
+    return () => ro.disconnect();
+  }, [maxHeight]);
+
+  const zoneLabel = (lx: number, ly: number): CSSProperties => ({
+    position: "absolute", left: lx, top: ly, lineHeight: 1,
+    fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: "0.14em",
+    textTransform: "uppercase", color: "var(--color-text-faint)",
+    pointerEvents: "none",
+  });
+
   return (
-    <line
-      x1={from[0]} y1={from[1]} x2={to[0]} y2={to[1]}
-      stroke={accent ? "var(--color-accent)" : "var(--color-text-faint)"}
-      strokeWidth={accent ? 1.5 : 1}
-      strokeDasharray={accent ? undefined : "4 3"}
-      markerEnd={accent ? "url(#arrow-accent)" : "url(#arrow)"}
-      opacity={accent ? 0.8 : 0.5}
-    />
+    <div ref={scalerRef} className="mt-5" style={{ position: "relative" }}>
+      <div
+        ref={stageRef}
+        style={{ position: "absolute", top: 0, left: 0, width: ARCH_W, height: ARCH_H, transformOrigin: "top left" }}
+      >
+        {/* edge + zone canvas */}
+        <svg width={ARCH_W} height={ARCH_H} style={{ position: "absolute", inset: 0, overflow: "visible" }}>
+          <defs>
+            <marker id="ah-a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+              <path d="M1 1 L8 4.5 L1 8 Z" fill="var(--color-accent)" />
+            </marker>
+            <marker id="ah-f" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+              <path d="M1 1 L8 4.5 L1 8 Z" fill="var(--color-text-faint)" />
+            </marker>
+          </defs>
+          {ARCH_ZONES.map((z) => (
+            <rect
+              key={z.label} x={z.x} y={z.y} width={z.w} height={z.h} rx={18}
+              fill={`color-mix(in srgb, ${z.tint} 4%, transparent)`}
+              stroke={`color-mix(in srgb, ${z.tint} 26%, transparent)`}
+              strokeWidth={1} strokeDasharray="2 6"
+            />
+          ))}
+          {ARCH_EDGES.map((e) => (
+            <path
+              key={e.pts.flat().join("_") + e.style} d={archPath(e.pts)} fill="none"
+              stroke={e.style === "solid" ? "var(--color-accent)" : "var(--color-text-faint)"}
+              strokeWidth={e.style === "solid" ? 2.4 : 1.8}
+              strokeLinecap="round" strokeLinejoin="round"
+              strokeDasharray={e.style === "dash" ? "5 5" : undefined}
+              markerEnd={e.style === "solid" ? "url(#ah-a)" : "url(#ah-f)"}
+              opacity={e.style === "solid" ? 1 : 0.85}
+            />
+          ))}
+        </svg>
+
+        {/* node cards */}
+        {ARCH_NODES.map((n) => {
+          const NodeIcon = n.Icon;
+          const Brand = n.brand;
+          return (
+            <div
+              key={n.t}
+              style={{
+                position: "absolute", left: n.x, top: n.y, width: n.w, height: n.h,
+                boxSizing: "border-box", display: "flex", alignItems: "center", gap: 12,
+                padding: "0 16px", borderRadius: 13,
+                background: n.big
+                  ? "color-mix(in srgb, var(--color-accent) 7%, var(--color-canvas-elev1))"
+                  : "var(--color-canvas-elev1)",
+                border: "1px solid var(--color-border)",
+                borderLeft: `${n.big ? 4 : 3}px solid ${n.c}`,
+                boxShadow: "var(--shadow-md)",
+              }}
+            >
+              <span
+                style={{
+                  width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center",
+                  color: n.c, background: `color-mix(in srgb, ${n.c} 15%, transparent)`, flex: "none",
+                }}
+              >
+                <NodeIcon size={17} strokeWidth={2} />
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap",
+                    fontSize: n.big ? 16 : 14.5, fontWeight: 600, letterSpacing: "-0.01em",
+                    color: "var(--color-text)",
+                  }}
+                >
+                  {Brand && <Brand size={14} style={{ flex: "none", opacity: 0.9 }} />}
+                  <span>{n.t}</span>
+                </div>
+                <div
+                  style={{
+                    fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--color-text-faint)",
+                    marginTop: 3, whiteSpace: "nowrap",
+                  }}
+                >
+                  {n.s}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* zone + band labels (on top of cards) */}
+        {ARCH_ZONES.map((z) => (
+          <div key={`zl-${z.label}`} style={zoneLabel(z.lx, z.ly)}>{z.label}</div>
+        ))}
+        {ARCH_BANDS.map((b) => (
+          <div key={b.t} style={zoneLabel(b.x, b.y)}>{b.t}</div>
+        ))}
+
+        {/* edge labels (chips, on top so they occlude node borders cleanly) */}
+        {ARCH_EDGES.filter((e) => e.label && e.at).map((e) => (
+          <div
+            key={`el-${e.label}`}
+            style={{
+              position: "absolute", left: e.at![0], top: e.at![1],
+              transform: "translate(-50%,-50%)", pointerEvents: "none",
+              fontFamily: "var(--font-mono)", fontSize: 10.5,
+              color: e.style === "solid" ? "var(--color-accent)" : "var(--color-text-muted)",
+              background: "var(--color-canvas)", padding: "2px 7px", borderRadius: 6,
+              border: `1px solid ${e.style === "solid" ? "var(--color-accent-border)" : "var(--color-border)"}`,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {e.label}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
