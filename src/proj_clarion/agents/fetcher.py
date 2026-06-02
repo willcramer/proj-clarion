@@ -41,10 +41,6 @@ class FetchResult:
     error: str | None = None
 
 
-class FetchDeniedError(Exception):
-    """Raised when a URL is outside the allowlist."""
-
-
 def _allowed_hosts() -> list[str]:
     raw = os.getenv("RESEARCH_ALLOWED_HOSTS", "")
     return [h.strip() for h in raw.split(",") if h.strip()]

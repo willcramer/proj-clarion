@@ -55,8 +55,10 @@ open http://localhost:12346   # every component Healthy: true
 ```
 
 Endpoints + usernames are in **Grafana Cloud → Connections → Prometheus /
-Loki → "Send Metrics" / "Send Logs"**. The token needs `metrics:write` +
-`logs:write`.
+Loki / Pyroscope → "Send Metrics" / "Send Logs" / "Send Profiles"**. The
+token needs `metrics:write` + `logs:write` (+ `profiles:write` if you enable
+app profiling) — or just reuse the single all-scopes Access Policy token from
+the project `../../.env` (see its "SHIP ALL TELEMETRY" banner).
 
 ## Verify (≈2 min after start)
 

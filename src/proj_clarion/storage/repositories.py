@@ -541,7 +541,11 @@ class PipelineRepo:
             """),
             {
                 "pid": pipeline_id,
-                "url": url,
+                # Defensive str(): callers sometimes pass a Pydantic HttpUrl
+                # (derived from a profile). psycopg can't adapt HttpUrl and
+                # raises "cannot adapt type 'HttpUrl'". Coerce here so no call
+                # site can reintroduce that crash.
+                "url": str(url) if url is not None else None,
                 "company": company,
                 "days": days,
                 "started_at": started_at,
@@ -622,6 +626,7 @@ class PipelineRepo:
 
     def list(
         self, session: Session, *, limit: int = 50, status: str | None = None,
+        profile_id: str | None = None, plan_id: str | None = None,
     ) -> list[dict[str, Any]]:
         # Two correlated subqueries: phases_done (count of completed
         # phases for this run) and current_phase (whichever phase is
@@ -640,9 +645,18 @@ class PipelineRepo:
             FROM pipelines p
         """
         params: dict[str, Any] = {"lim": limit}
+        clauses: list[str] = []
         if status is not None:
-            sql += " WHERE status = :st"
+            clauses.append("status = :st")
             params["st"] = status
+        if profile_id is not None:
+            clauses.append("profile_id = :pf")
+            params["pf"] = profile_id
+        if plan_id is not None:
+            clauses.append("plan_id = :pl")
+            params["pl"] = str(plan_id)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY started_at DESC LIMIT :lim"
         rows = session.execute(text(sql), params).fetchall()
         return [
@@ -786,9 +800,15 @@ class PipelineRepo:
         if not events:
             return
         session.execute(
+            # ON CONFLICT DO NOTHING: when a build is SUPERSEDED (cancel the
+            # in-flight task, then resume the SAME pipeline_id in place), a
+            # lagging flush from the cancelled task could collide on
+            # (pipeline_id, seq) with the resumed task. Drop the late
+            # duplicate instead of crashing the resume.
             text("""
                 INSERT INTO pipeline_events (pipeline_id, seq, event)
                 VALUES (:pid, :seq, :ev)
+                ON CONFLICT (pipeline_id, seq) DO NOTHING
             """).bindparams(bindparam("ev", type_=JSONB)),
             [
                 {"pid": pipeline_id, "seq": first_seq + i, "ev": ev}

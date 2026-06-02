@@ -29,6 +29,8 @@ from proj_clarion.api.pipeline_registry import (
     get_pipeline,
     get_pipeline_events,
     list_pipelines,
+    list_pipelines_for,
+    run_or_resume_phase,
     start_pipeline,
     start_pipeline_from_phase,
     stream_pipeline,
@@ -242,10 +244,22 @@ async def run_from_phase(body: RunFromPhaseBody = Body(...)) -> PipelineSummary:
             url = url or parent["url"]
             company = company or parent["company"]
             # Keep the requested days even if parent had a different value
+    # Resolve url/company from the plan's profile (or the profile directly)
+    # when not supplied — parity with the assistant tool, so a re-plan by
+    # profile_id alone works and reuses the existing build. (str-coerced to
+    # avoid the HttpUrl psycopg adapter crash.)
+    if not url and (body.profile_id or body.plan_id):
+        from proj_clarion.agents.clarion_tools import _resolve_build_target
+        with session_scope() as s:
+            r_url, r_company, _ = _resolve_build_target(
+                s, plan_id=body.plan_id, profile_id=body.profile_id,
+            )
+        url = url or r_url
+        company = company or r_company
     if not url:
         raise HTTPException(
             status_code=400,
-            detail="url is required (or parent_pipeline_id whose url we can inherit)",
+            detail="url is required (or a profile_id/plan_id/parent we can derive it from)",
         )
     # Same lenient normalization as /run. Inherited URLs from the
     # parent pipeline are already canonical, but pass them through
@@ -256,16 +270,31 @@ async def run_from_phase(body: RunFromPhaseBody = Body(...)) -> PipelineSummary:
     except URLValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    state = start_pipeline_from_phase(
-        starting_phase=body.phase,
-        url=url, company=company, days=days,
-        profile_id=body.profile_id,
-        profile_path=body.profile_path,
-        plan_id=body.plan_id,
-        parent_pipeline_id=body.parent_pipeline_id,
-        volume_per_day=body.volume_per_day,
-        stop_after_phase=body.stop_after_phase,
-    )
+    # ONE build per profile/plan: resume the canonical pipeline IN PLACE
+    # (same pipeline_id) when one exists for this profile/plan, instead of
+    # forking a sibling. So the UI "Re-run"/resume reuses the build — no new
+    # id, no DB clutter. Falls back to a fresh row for a profile_path-only
+    # resume (no ids to dedupe on) or a genuinely different URL.
+    if body.profile_id or body.plan_id:
+        state, _reused = run_or_resume_phase(
+            starting_phase=body.phase,
+            url=url, company=company, days=days,
+            profile_id=body.profile_id,
+            plan_id=body.plan_id,
+            volume_per_day=body.volume_per_day,
+            stop_after_phase=body.stop_after_phase,
+        )
+    else:
+        state = start_pipeline_from_phase(
+            starting_phase=body.phase,
+            url=url, company=company, days=days,
+            profile_id=body.profile_id,
+            profile_path=body.profile_path,
+            plan_id=body.plan_id,
+            parent_pipeline_id=body.parent_pipeline_id,
+            volume_per_day=body.volume_per_day,
+            stop_after_phase=body.stop_after_phase,
+        )
     return _summarise(state)
 
 
@@ -307,9 +336,21 @@ async def continue_endpoint(
 
 
 @router.get("", response_model=list[PipelineSummary])
-def list_endpoint() -> list[PipelineSummary]:
-    """Newest first. DB-backed, survives API restart."""
-    pipelines = list_pipelines()
+def list_endpoint(
+    profile_id: str | None = None,
+    plan_id: str | None = None,
+    status: str | None = None,
+) -> list[PipelineSummary]:
+    """Newest first. DB-backed, survives API restart.
+
+    Optional `?profile_id=&plan_id=&status=` filters let the UI/agent check
+    'is there already a (running) build for this profile?' — the basis for
+    one-build-per-profile reuse."""
+    filtered = profile_id is not None or plan_id is not None or status is not None
+    pipelines = (
+        list_pipelines_for(profile_id=profile_id, plan_id=plan_id, status=status, limit=200)
+        if filtered else list_pipelines()
+    )
     if not pipelines:
         return []
     # One batch pull from the DB enriches every row with event count,
@@ -317,7 +358,7 @@ def list_endpoint() -> list[PipelineSummary]:
     # uses the phase fields for the inline progress bar.
     with session_scope() as s:
         repo = PipelineRepo()
-        rows = repo.list(s, limit=200)
+        rows = repo.list(s, limit=200, profile_id=profile_id, plan_id=plan_id, status=status)
     by_id = {r["pipeline_id"]: r for r in rows}
     out: list[PipelineSummary] = []
     for p in pipelines:

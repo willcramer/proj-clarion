@@ -19,6 +19,7 @@ const OnePagerPage = Object.values(onePagerMods)[0]?.OnePagerPage;
 import { AuditPage } from "@/pages/Audit";
 import { DashboardPage } from "@/pages/Dashboard";
 import { ProfilesListPage, ProfileDetailPage } from "@/pages/Profiles";
+import { ProfileDeliverablePage } from "@/pages/ProfileDeliverable";
 import { PlansListPage, PlanDetailPage } from "@/pages/Plans";
 import { RunsPage } from "@/pages/Runs";
 import { NewDemoPage } from "@/pages/NewDemo";
@@ -71,6 +72,9 @@ export default function App() {
                     <Route path="/new" element={<NewDemoPage />} />
                     <Route path="/profiles" element={<ProfilesListPage />} />
                     <Route path="/profiles/:profileId" element={<ProfileDetailPage />} />
+                    {/* Hidden deliverable page — reached from a button on the
+                        profile page (wiring added separately). */}
+                    <Route path="/profiles/:profileId/deliverable" element={<ProfileDeliverablePage />} />
                     <Route path="/plans" element={<PlansListPage />} />
                     <Route path="/plans/:planId" element={<PlanDetailPage />} />
                     <Route path="/runs" element={<RunsPage />} />

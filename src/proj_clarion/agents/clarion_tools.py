@@ -142,18 +142,19 @@ def _exec_get_plan(args: dict[str, Any], session: Session) -> dict[str, Any]:
 
 
 def _exec_list_pipelines(args: dict[str, Any], session: Session) -> list[dict[str, Any]]:
-    """Recent pipelines, newest first. Optional `profile_id` /
-    `plan_id` filter; otherwise returns all."""
+    """Recent pipelines, newest first. Optional `profile_id` / `plan_id` /
+    `status` filter; otherwise returns all. Use status='running' to check
+    whether a profile already has a build in flight before kicking one."""
     limit = _clamp_limit(args)
-    profile_filter = args.get("profile_id")
-    plan_filter    = args.get("plan_id")
-    rows = PipelineRepo().list(session, limit=limit)
+    profile_filter = args.get("profile_id") or None
+    plan_filter    = args.get("plan_id") or None
+    status_filter  = args.get("status") or None
+    rows = PipelineRepo().list(
+        session, limit=limit,
+        profile_id=profile_filter, plan_id=plan_filter, status=status_filter,
+    )
     out: list[dict[str, Any]] = []
     for r in rows:
-        if profile_filter and r.get("profile_id") != profile_filter:
-            continue
-        if plan_filter and r.get("plan_id") != plan_filter:
-            continue
         # PipelineRepo.list already returns dicts; pass through but
         # serialize timestamps.
         out.append({
@@ -293,7 +294,11 @@ def _resolve_build_target(
         if resolved_profile_id:
             prof = ProfileRepo().get(session, resolved_profile_id)
             if prof is not None and prof.company:
-                url = prof.company.primary_url or None
+                # primary_url is a Pydantic HttpUrl — coerce to str or it
+                # propagates into the pipelines INSERT and psycopg raises
+                # "cannot adapt type 'HttpUrl'". (This is what forced the
+                # URL-as-str workaround + the duplicate build.)
+                url = str(prof.company.primary_url) if prof.company.primary_url else None
                 company = prof.company.name or None
     except Exception:  # noqa: BLE001 — resolution is best-effort
         pass
@@ -377,8 +382,11 @@ def _exec_run_pipeline_phase(args: dict[str, Any], session: Session) -> dict[str
       * phase='research'                              → full rebuild from the URL
 
     URL + company are auto-resolved from the plan's profile (or the
-    given profile) so the SE doesn't have to repeat them."""
-    from proj_clarion.api.pipeline_registry import start_pipeline_from_phase
+    given profile) so the SE doesn't have to repeat them.
+
+    Reuses the profile/plan's existing build IN PLACE (same pipeline_id) —
+    never mints a sibling for the same target."""
+    from proj_clarion.api.pipeline_registry import run_or_resume_phase
 
     phase = args.get("phase")
     if phase not in _VALID_PHASES:
@@ -403,19 +411,29 @@ def _exec_run_pipeline_phase(args: dict[str, Any], session: Session) -> dict[str
         raise ValueError("phase='research' requires a url (none could be derived)")
 
     vpd = args.get("volume_per_day")
+    vpd = int(vpd) if vpd else None
     # Governance: re-planning (phase='plan') stops at the plan — it doesn't
     # auto-provision after a re-plan. Downstream phases (generate/provision/
     # kg-publish) run through, since those ARE the explicit "go live" step.
     stop_after = args.get("stop_after_phase") or ("plan" if phase == "plan" else None)
-    state = start_pipeline_from_phase(
+    # supersede=True: the SE/agent knows the in-flight build WON'T satisfy
+    # this request (e.g. an extend landed after it started) → cancel + resume
+    # the SAME build. Default False reuses an in-flight build that already
+    # covers the request — never starts a second one.
+    supersede = bool(args.get("supersede"))
+
+    # ONE build per profile/plan: resume the canonical pipeline in place
+    # (same pipeline_id), or create the first row. No fan-out.
+    state, reused = run_or_resume_phase(
         starting_phase=phase,
-        url=url or f"plan://{(plan_id or 'unknown')[:8]}",
+        url=url,
         company=company,
         days=int(args.get("days") or 1),
-        profile_id=resolved_profile_id if phase == "plan" else None,
-        plan_id=plan_id if phase in ("approve", "generate", "provision", "kg-publish") else None,
-        volume_per_day=int(vpd) if vpd else None,
+        profile_id=resolved_profile_id,
+        plan_id=plan_id,
+        volume_per_day=vpd,
         stop_after_phase=stop_after,
+        supersede=supersede,
     )
     return {
         "pipeline_id": state.pipeline_id,
@@ -423,8 +441,15 @@ def _exec_run_pipeline_phase(args: dict[str, Any], session: Session) -> dict[str
         "phase":       phase,
         "plan_id":     plan_id,
         "profile_id":  resolved_profile_id,
+        "reused":      reused,
         "watch_url":   f"/pipelines/{state.pipeline_id}",
-        "message":     f"Started build from phase '{phase}'. Watch it live at /pipelines/{state.pipeline_id}.",
+        "message": (
+            f"Resumed build {state.pipeline_id} from phase '{phase}' (same build, "
+            f"no new id). Watch it at /pipelines/{state.pipeline_id}."
+            if reused else
+            f"Started build {state.pipeline_id} from phase '{phase}'. "
+            f"Watch it at /pipelines/{state.pipeline_id}."
+        ),
     }
 
 
@@ -724,7 +749,9 @@ TOOL_LIST_PIPELINES: dict[str, Any] = {
     "description": (
         "List recent pipeline runs (builds), newest first. Each row has "
         "status, url, profile_id, plan_id, started_at, phases_done, "
-        "current_phase. Optional filters by profile_id or plan_id."
+        "current_phase. Filter by profile_id, plan_id, and/or status. Use "
+        "profile_id + status='running' to check whether a profile ALREADY has "
+        "a build in flight BEFORE kicking one — there must only ever be one."
     ),
     "input_schema": {
         "type": "object",
@@ -732,6 +759,7 @@ TOOL_LIST_PIPELINES: dict[str, Any] = {
             "limit":      _LIST_LIMIT_PROP,
             "profile_id": {"type": "string", "description": "Filter to pipelines for one profile."},
             "plan_id":    {"type": "string", "description": "Filter to pipelines that landed on one plan."},
+            "status":     {"type": "string", "description": "Filter by status, e.g. 'running', 'failed', 'done'."},
         },
         "required": [],
     },
@@ -833,9 +861,21 @@ TOOL_RUN_PIPELINE_PHASE: dict[str, Any] = {
         "refining an existing demo. Phases: 'plan' (re-plan from a profile), "
         "'approve'/'generate'/'provision'/'kg-publish' (run from there on an "
         "existing plan), 'research' (full rebuild). URL + company are "
-        "auto-derived from the plan's profile. Returns a pipeline_id to watch. "
-        "Typical refine flow: extend_profile (if needed) then run_pipeline_phase "
-        "with phase='plan' to regenerate the plan from the richer profile."
+        "auto-derived from the plan's profile. Typical refine flow: "
+        "extend_profile (if needed) then run_pipeline_phase phase='plan' to "
+        "regenerate the plan from the richer profile.\n\n"
+        "REUSES THE PROFILE/PLAN'S EXISTING BUILD IN PLACE — it returns the "
+        "SAME pipeline_id and resumes the requested phase, never a new build "
+        "row. So there is ALWAYS at most one build per profile. Calling this "
+        "again after a failure just resumes that same build from the failed "
+        "phase. NEVER start a second build for a profile that already has "
+        "one — there is no need, and the SE has explicitly forbidden it.\n\n"
+        "If a build is already RUNNING for this profile/plan: by default this "
+        "reuses it (returns the running id, starts nothing new). Only set "
+        "supersede=true when the in-flight build genuinely WON'T satisfy the "
+        "request — e.g. you just extend_profile'd AFTER it started, so it must "
+        "be cancelled and re-run with the new data. supersede cancels the "
+        "in-flight run and resumes the SAME id; it does not create a new one."
     ),
     "input_schema": {
         "type": "object",
@@ -843,10 +883,11 @@ TOOL_RUN_PIPELINE_PHASE: dict[str, Any] = {
             "phase":      {"type": "string", "enum": list(_VALID_PHASES), "description": "Phase to start from."},
             "plan_id":    {"type": "string", "description": "Plan to build from (required for approve/generate/provision/kg-publish)."},
             "profile_id": {"type": "string", "description": "Profile to plan from (required for phase='plan' if no plan_id)."},
-            "url":        {"type": "string", "description": "Override URL (usually auto-derived)."},
+            "url":        {"type": "string", "description": "Override URL (usually auto-derived). A DIFFERENT host forks a new build; same host always reuses."},
             "company":    {"type": "string", "description": "Override company name (usually auto-derived)."},
             "days":       {"type": "integer", "minimum": 1, "maximum": 30, "description": "Days of history (default 1)."},
             "volume_per_day": {"type": "integer", "minimum": 100, "maximum": 100000, "description": "Override events/day."},
+            "supersede":  {"type": "boolean", "description": "Cancel an in-flight build for this profile and resume the SAME id from this phase. Use ONLY when the running build won't reflect a change you just made (e.g. a fresh extend_profile). Default false reuses the in-flight build. Never creates a new build either way."},
         },
         "required": ["phase"],
     },

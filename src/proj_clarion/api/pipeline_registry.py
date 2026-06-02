@@ -140,6 +140,36 @@ def get_pipeline(pipeline_id: str) -> PipelineState | None:
     return _row_to_state(row) if row else None
 
 
+def list_pipelines_for(
+    *, profile_id: str | None = None, plan_id: str | None = None,
+    status: str | None = None, limit: int = 50,
+) -> list[PipelineState]:
+    """Filtered pipeline list (newest first). Lets the agent/UI ask
+    'is there already a build for this profile/plan (running)?' cheaply."""
+    with session_scope() as s:
+        rows = _repo.list(s, limit=limit, status=status,
+                          profile_id=profile_id, plan_id=plan_id)
+    return [_row_to_state(r) for r in rows]
+
+
+def find_pipeline_for(
+    *, profile_id: str | None = None, plan_id: str | None = None,
+) -> PipelineState | None:
+    """The canonical (newest) pipeline for a profile or plan, or None if
+    there isn't one yet. This is the row that re-runs/retries/refines REUSE
+    in place — we never mint a sibling for the same profile/plan. Prefer a
+    plan_id match (most specific); fall back to profile_id."""
+    if plan_id:
+        rows = list_pipelines_for(plan_id=plan_id, limit=1)
+        if rows:
+            return rows[0]
+    if profile_id:
+        rows = list_pipelines_for(profile_id=profile_id, limit=1)
+        if rows:
+            return rows[0]
+    return None
+
+
 def get_pipeline_events(pipeline_id: str) -> list[dict[str, Any]] | None:
     """Full event log for a pipeline. Returns None if the pipeline
     doesn't exist; empty list if it exists but has no events yet."""
@@ -222,6 +252,11 @@ def start_pipeline_from_phase(
     )
 
 
+# Phases whose orchestrator step requires a plan_id (the plan must already
+# exist). 'plan' resumes from a profile; 'research' from the url.
+_PLAN_PHASES = ("approve", "generate", "provision", "kg-publish")
+
+
 def continue_pipeline(
     pipeline_id: str,
     *,
@@ -229,32 +264,63 @@ def continue_pipeline(
     stop_after_phase: str | None = None,
     plan_id: str | None = None,
     profile_id: str | None = None,
+    volume_per_day: int | None = None,
+    supersede: bool = False,
 ) -> PipelineState | None:
-    """Resume a build that stopped at the plan (or any terminal point) by
-    appending the remaining phases to the SAME pipeline_id — no second
-    build row. Reopens the row to `running`, then runs the orchestrator
-    from `starting_phase` writing events after the existing ones.
+    """Resume a build IN PLACE from `starting_phase` — appending the
+    remaining phases to the SAME pipeline_id, no second build row. This is
+    the single path for every re-run / retry / refine: reopen the row to
+    `running` and run the orchestrator from `starting_phase`, writing events
+    after the existing ones.
 
-    Returns None if the pipeline doesn't exist. If it's already running we
-    return its current state unchanged (idempotent — a double-click does
-    not start a second task). Raises ValueError if there's no plan_id to
-    act on (caller surfaces a 400)."""
+    Returns None if the pipeline doesn't exist.
+
+    Running-row behavior:
+      - supersede=False (default): the in-flight build already covers the
+        request — return it unchanged (reuse, no new task).
+      - supersede=True: the in-flight build WON'T get the job done (e.g. a
+        profile extend landed after it started). Cancel it, then reopen and
+        resume the SAME id. append_events is ON CONFLICT-safe so a lagging
+        flush from the cancelled task can't crash the resume.
+
+    Input rules mirror run_demo_pipeline:
+      - starting_phase in {approve,generate,provision,kg-publish} → needs plan_id
+      - starting_phase == 'plan'                                   → needs profile_id
+      - starting_phase == 'research'                               → needs url (from the row)
+    """
+    row = get_pipeline(pipeline_id)
+    if row is None:
+        return None
+
+    # Inherit what the build already produced.
+    plan_id = plan_id or row.plan_id
+    profile_id = profile_id or row.profile_id
+
+    # If it's still running, decide: reuse it, or supersede it.
+    if row.status == "running":
+        if not supersede:
+            return row
+        # Cancel the in-flight task; the DB row flips to `cancelled`
+        # immediately so the reopen below sees a terminal row.
+        cancel_pipeline(pipeline_id)
+
+    # Validate inputs for the phase we're about to resume from.
+    if starting_phase in _PLAN_PHASES and not plan_id:
+        raise ValueError(
+            f"cannot resume from '{starting_phase}': no plan_id on this build"
+        )
+    if starting_phase == "plan" and not profile_id:
+        raise ValueError(
+            "cannot re-plan: no profile_id on this build"
+        )
+
     with session_scope() as s:
-        row = _repo.get(s, pipeline_id)
-        if row is None:
+        cur = _repo.get(s, pipeline_id)
+        if cur is None:
             return None
-        if row["status"] == "running":
-            return _row_to_state(row)
-        # Inherit the plan/profile this build already produced.
-        plan_id = plan_id or row.get("plan_id")
-        profile_id = profile_id or row.get("profile_id")
-        if not plan_id:
-            raise ValueError(
-                "cannot continue: this build has no plan to approve/provision"
-            )
-        url = row["url"]
-        company = row.get("company")
-        days = row.get("days") or 1
+        url = cur["url"]
+        company = cur.get("company")
+        days = cur.get("days") or 1
         start_seq = _repo.event_count(s, pipeline_id)
         _repo.reopen(s, pipeline_id)
 
@@ -268,6 +334,7 @@ def continue_pipeline(
                 "stop_after_phase": stop_after_phase,
                 "plan_id": plan_id,
                 "profile_id": profile_id,
+                "volume_per_day": volume_per_day,
                 # The prior phases' done-events are already on this stream.
                 "emit_reused_phases": False,
             },
@@ -279,6 +346,73 @@ def continue_pipeline(
         row2 = _repo.get(s, pipeline_id)
     assert row2 is not None
     return _row_to_state(row2)
+
+
+def _same_host(a: str | None, b: str | None) -> bool:
+    """True if two build urls point at the same company host (so a re-run
+    reuses the build in place). A missing/placeholder url → treat as same
+    (we only fork a new build on a genuinely different host)."""
+    from urllib.parse import urlparse
+
+    def host(u: str | None) -> str:
+        if not u or u.startswith("plan://"):
+            return ""
+        try:
+            return (urlparse(u).hostname or "").lower().removeprefix("www.")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    ha, hb = host(a), host(b)
+    if not ha or not hb:
+        return True
+    return ha == hb
+
+
+def run_or_resume_phase(
+    *,
+    starting_phase: str,
+    url: str | None,
+    company: str | None = None,
+    days: int = 1,
+    profile_id: str | None = None,
+    plan_id: str | None = None,
+    volume_per_day: int | None = None,
+    stop_after_phase: str | None = None,
+    supersede: bool = False,
+) -> tuple[PipelineState, bool]:
+    """ONE build per profile/plan — the single entry point for every
+    re-run / retry / refine (assistant AND UI go through here).
+
+    Resume the canonical pipeline for this profile/plan IN PLACE (same
+    pipeline_id) when one exists and the URL matches; otherwise create the
+    first row. A genuinely different URL forks a NEW row, parent-linked to
+    the prior one for connectedness. Returns (state, reused)."""
+    existing = find_pipeline_for(plan_id=plan_id, profile_id=profile_id)
+    if existing is not None and _same_host(existing.url, url):
+        state = continue_pipeline(
+            existing.pipeline_id,
+            starting_phase=starting_phase,
+            stop_after_phase=stop_after_phase,
+            plan_id=plan_id,
+            profile_id=profile_id,
+            volume_per_day=volume_per_day,
+            supersede=supersede,
+        )
+        if state is not None:
+            return state, True
+
+    state = start_pipeline_from_phase(
+        starting_phase=starting_phase,
+        url=url or f"plan://{(plan_id or profile_id or 'unknown')[:8]}",
+        company=company,
+        days=days,
+        profile_id=profile_id if starting_phase == "plan" else None,
+        plan_id=plan_id if starting_phase in _PLAN_PHASES else None,
+        volume_per_day=volume_per_day,
+        stop_after_phase=stop_after_phase,
+        parent_pipeline_id=existing.pipeline_id if existing is not None else None,
+    )
+    return state, False
 
 
 def cancel_pipeline(pipeline_id: str) -> bool:

@@ -34,6 +34,39 @@ def cli() -> None:
 
 
 @cli.command()
+@click.option("--probe/--no-probe", default=True,
+              help="Live AUTH-probe the Grafana Cloud token (no tenant writes). Default on.")
+def doctor(probe: bool) -> None:
+    """Preflight: will every signal reach your Grafana Cloud tenant?
+
+    Checks each telemetry signal (metrics / logs / traces / profiles / sigil),
+    names the exact Access-Policy scope its token needs, and tells you exactly
+    what to set when something's missing. Run this after editing `.env`."""
+    from proj_clarion.observability.preflight import telemetry_preflight
+
+    checks = telemetry_preflight(probe=probe)
+    table = Table(title="Telemetry preflight — ship-everything-to-Grafana-Cloud")
+    table.add_column("Signal")
+    table.add_column("Status")
+    table.add_column("Scope")
+    table.add_column("Detail / fix")
+    for c in checks:
+        mark = "[green]✓ ok[/green]" if c.ok else (
+            "[yellow]! warn[/yellow]" if c.severity == "warn" else "[red]✗ MISSING[/red]")
+        detail = c.detail if c.ok else (c.remediation or c.detail)
+        table.add_row(c.signal, mark, c.required_scope or "—", detail)
+    console.print(table)
+    gaps = [c for c in checks if not c.ok]
+    if gaps:
+        console.print(Panel.fit(
+            f"[red]{len(gaps)} signal(s) won't reach your tenant.[/red] Fix the rows above, "
+            "then re-run `clarion doctor`.", border_style="red"))
+        sys.exit(1)
+    console.print(Panel.fit("[green]All telemetry signals are configured to ship to Cloud.[/green]",
+                            border_style="green"))
+
+
+@cli.command()
 @click.argument("url")
 @click.option("--company", help="Optional company hint")
 @click.option("--out", type=click.Path(path_type=Path), help="Override output path")
@@ -850,14 +883,13 @@ def kg_verify(plan_id: str, entity_type: str | None) -> None:
     import json as _json
     import subprocess
 
-    from proj_clarion.storage import PlanRepo, session_scope
+    from proj_clarion.storage import session_scope
 
     with session_scope() as s:
         full_plan_id = _resolve_plan_id(s, plan_id)
         if not full_plan_id:
             console.print(f"[red]No plan matches[/red] {plan_id!r}")
             sys.exit(1)
-        plan = PlanRepo().get(s, full_plan_id)
 
     types_to_check = [entity_type] if entity_type else [
         "Region", "Channel", "Store", "FulfillmentCenter",

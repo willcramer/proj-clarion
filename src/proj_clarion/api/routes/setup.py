@@ -82,6 +82,22 @@ def get_status() -> dict[str, Any]:
     return check_status()
 
 
+@router.get("/telemetry-preflight")
+def get_telemetry_preflight(probe: bool = False) -> dict[str, Any]:
+    """Per-signal readiness for shipping ALL telemetry to a Grafana Cloud
+    tenant (metrics/logs/traces/profiles/sigil). For each: is it configured,
+    the exact scope its token needs, and a precise remediation when not.
+    `?probe=true` adds a live AUTH probe of the Cloud token (no tenant
+    writes). Never echoes token values."""
+    from proj_clarion.observability.preflight import telemetry_preflight
+
+    checks = telemetry_preflight(probe=probe)
+    return {
+        "ok": all(c.ok for c in checks),
+        "checks": [c.as_dict() for c in checks],
+    }
+
+
 @router.get("/schema")
 def get_schema() -> dict[str, Any]:
     """Expose the SETUP_KEYS metadata so the UI can render the form from

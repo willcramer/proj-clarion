@@ -197,6 +197,22 @@ def init_telemetry() -> bool:
     # --- Sigil ---
     _init_sigil()
 
+    # --- Telemetry preflight (presence/scope; no network) ---
+    # Surface, at boot, exactly which signals WON'T reach Cloud and the exact
+    # var+scope each needs — so a half-configured .env is loud, not silent.
+    try:
+        from proj_clarion.observability.preflight import missing_pieces, telemetry_preflight
+
+        for chk in missing_pieces(telemetry_preflight(probe=False)):
+            _logger.warning(
+                "telemetry.preflight.gap",
+                signal=chk.signal,
+                required_scope=chk.required_scope,
+                fix=chk.remediation,
+            )
+    except Exception as exc:  # noqa: BLE001 — preflight must never break boot
+        _logger.debug("telemetry.preflight.skip", error=str(exc)[:200])
+
     # --- Exit flush ---
     # CLI subprocesses (research, plan, kg-publish) finish in seconds-to-
     # minutes. Without an atexit hook the BatchSpanProcessor's queued spans
