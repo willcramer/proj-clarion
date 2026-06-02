@@ -29,7 +29,7 @@ from anthropic import Anthropic
 from proj_clarion.agents.external_sources import (
     ExternalSourceSummary, gather_external_signals,
 )
-from proj_clarion.agents.fetcher import FetchDeniedError, FetchResult, fetch_all
+from proj_clarion.agents.fetcher import FetchResult, fetch_all
 from proj_clarion.observability.llm_client import call_anthropic
 from proj_clarion.schemas import CompanyProfile
 

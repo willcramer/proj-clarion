@@ -51,26 +51,29 @@ def _allowed_hosts() -> list[str]:
 
 
 def is_host_allowed(url: str, extra_allow: list[str] | None = None) -> bool:
-    """Return True if `url`'s host is permitted by the research allowlist.
+    """Return True if `url`'s host may be fetched.
 
-    Two modes:
-      * If `RESEARCH_ALLOWED_HOSTS` is empty (the default for the public
-        template repo), ALL hosts are allowed. This lets the SE point
-        Clarion at any prospect URL without curating an allowlist first
-        — anyone-can-demo-anyone is the design goal.
-      * If `RESEARCH_ALLOWED_HOSTS` is non-empty, only hosts matching one
-        of the comma-separated fnmatch patterns are fetched. Use this in
-        regulated / hardened deployments where you want explicit control
-        over what the agent reaches out to.
+    The app imposes NO host allowlist by default. If `RESEARCH_ALLOWED_HOSTS`
+    is unset/empty (the default), EVERY host is allowed — point Clarion at any
+    company URL and it fetches whatever is publicly reachable. A page that
+    can't be fetched is logged and skipped (see `fetch_one`), never blocked.
 
-    `extra_allow` is the per-fetch ad-hoc additions (typically just the
-    prospect's primary URL from a CLI / API call). When the allowlist is
-    in permissive mode, these are still honoured but redundant.
+    `RESEARCH_ALLOWED_HOSTS` is a purely opt-in hardening knob for regulated
+    deployments: set it to a comma-separated list of fnmatch patterns and only
+    those hosts are fetched. `extra_allow` then EXTENDS that configured list
+    (e.g. the company's own URL).
+
+    Critically, `extra_allow` must NEVER create an allowlist on its own — with
+    no configured base list the result is always permissive. (The old code did
+    `_allowed_hosts() + extra_allow` and treated a non-empty result as strict
+    mode, so passing the target host as extra_allow silently denied every OTHER
+    host — e.g. global.kfc.com, sec.gov — and crashed research.)
     """
-    patterns = _allowed_hosts() + (extra_allow or [])
-    if not patterns:
-        # Permissive default — no allowlist configured → no restrictions.
+    base = _allowed_hosts()
+    if not base:
+        # No allowlist configured → no restriction whatsoever. Fetch any host.
         return True
+    patterns = base + (extra_allow or [])
     host = (urlparse(url).hostname or "").lower()
     return any(fnmatch(host, p.lower()) for p in patterns)
 
@@ -126,9 +129,21 @@ async def fetch_one(
     as drop-this-source rather than abort-the-pipeline. Hard exceptions
     (network unreachable, SSL failure) are still caught here too."""
     if not is_host_allowed(url, extra_allow=extra_allow):
+        # Only reachable when an operator opted into RESEARCH_ALLOWED_HOSTS and
+        # this host isn't on it. The app adds no hard blocker: don't crash the
+        # pipeline — log it and return a soft error so research just drops this
+        # source, exactly like a 403/timeout. The host is simply not fetched.
         host = urlparse(url).hostname
-        _logger.warning("fetch.denied", url=url, host=host)
-        raise FetchDeniedError(f"host '{host}' is not on the research allowlist")
+        _logger.warning("fetch.skipped_not_allowlisted", url=url, host=host)
+        return FetchResult(
+            url=url, final_url=url, status=0,
+            fetched_at=datetime.now(UTC), duration_seconds=0.0,
+            title=None, text="", raw_html_truncated="",
+            error=(
+                f"skipped: host '{host}' is not on RESEARCH_ALLOWED_HOSTS "
+                "(unset that env var to fetch any host)"
+            ),
+        )
 
     started = time.monotonic()
     fetched_at = datetime.now(UTC)
