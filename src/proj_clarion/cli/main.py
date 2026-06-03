@@ -510,7 +510,7 @@ def _sweep_orphan_clarion_prom_rules(*, out_dir: Path, current_plan_id_prefix: s
     the `clarion_entity_info` claim is freed). Without this, every plan
     after the first hits HTTP 422 'duplicate of an existing rule'.
 
-    Failures here are non-fatal — if `gcx kg rules list` itself fails (auth,
+    Failures here are non-fatal — if `gcx kg prom-rules list` itself fails (auth,
     network), we just skip and let the real push surface the error. We
     deliberately don't recurse into any per-rule diagnostics; the goal is
     only to clear OUR plan's path before pushing.
@@ -518,13 +518,13 @@ def _sweep_orphan_clarion_prom_rules(*, out_dir: Path, current_plan_id_prefix: s
     import json
     import subprocess
 
-    # `gcx kg rules list` doesn't ship a clean parseable mode (its `-o json`
+    # `gcx kg prom-rules list` doesn't ship a clean parseable mode (its `-o json`
     # output is `null`), but `-vvv --log-http-payload` puts the raw HTTP
     # response body on stderr — which contains a JSON object with the
     # ruleNames array. We grep for the line that starts with `{` and has
     # `"ruleNames":`. Brittle-ish but stable across gcx 0.2.x.
     list_result = subprocess.run(
-        ["gcx", "kg", "rules", "list", "-vvv", "--log-http-payload"],
+        ["gcx", "kg", "prom-rules", "list", "-vvv", "--log-http-payload"],
         capture_output=True, text=True, check=False,
     )
     if list_result.returncode != 0:
@@ -577,7 +577,7 @@ def _sweep_orphan_clarion_prom_rules(*, out_dir: Path, current_plan_id_prefix: s
         tomb_path = tomb_dir / f"{name}.yaml"
         tomb_path.write_text(body)
         result = subprocess.run(
-            ["gcx", "kg", "rules", "create", "-f", str(tomb_path)],
+            ["gcx", "kg", "prom-rules", "create", "-f", str(tomb_path)],
             capture_output=True, text=True, check=False,
         )
         if result.returncode != 0:
@@ -710,7 +710,7 @@ def kg_publish(plan_id: str, push_rules: bool, emit: bool,
         from proj_clarion.observability.tools import track_tool_call
         for fname, gcx_cmd, tool_name in (
             ("model-rules.yaml", ["gcx", "kg", "model-rules", "create", "-f"], "kg_model_rules_push"),
-            ("prom-rules.yaml",  ["gcx", "kg", "rules",       "create", "-f"], "kg_prom_rules_push"),
+            ("prom-rules.yaml",  ["gcx", "kg", "prom-rules", "create", "-f"], "kg_prom_rules_push"),
         ):
             file_path = out_dir / fname
             console.print(f"[cyan]Pushing[/cyan] {fname} via gcx…")
