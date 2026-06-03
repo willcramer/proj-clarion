@@ -35,6 +35,7 @@ Add new shared helpers here rather than inlining them per-site.
 from __future__ import annotations
 
 import os
+import re
 
 from opentelemetry.sdk.resources import Resource
 
@@ -150,6 +151,17 @@ def clarion_resource(
         attrs["clarion.plan_id"] = plan_id
     if customer is not None:
         attrs["clarion.customer"] = customer
+
+    # k8s.node.name is the first tier of Grafana Cloud Application
+    # Observability's host-identity match. Without one of (k8s.node.name |
+    # host.name+cloud.provider | grafana.host.id) App O11y can't meter
+    # host-hours and emits its "no host telemetry" warning. We synthesize a
+    # stable per-customer node name so the demo's synthetic K8s fleet
+    # registers as a host. NOTE: this is what makes App O11y start metering
+    # host-hours. `extra` can override (e.g. per-node fan-out later).
+    host_slug = re.sub(r"[^a-z0-9-]+", "-", (customer or "demo").lower()).strip("-") or "demo"
+    attrs["k8s.node.name"] = f"clarion-{host_slug}-node-0"
+
     if extra:
         attrs.update(extra)
 
