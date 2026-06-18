@@ -6,7 +6,7 @@ import {
   Activity,
   History,
   Search,
-  Sparkles,
+  Hammer,
   Loader2,
   Menu,
   X,
@@ -33,7 +33,7 @@ import { useAssistant } from "@/lib/AssistantContext";
 const NAV = [
   { to: "/profiles", label: "Company Profiles", icon: ScrollText    },
   { to: "/plans",    label: "Demo Plans",       icon: ClipboardList },
-  { to: "/new",      label: "Demo Builds",      icon: Sparkles      },
+  { to: "/new",      label: "Demo Builds",      icon: Hammer        },
 ];
 
 // Secondary nav, surfaced via UserMenu so they remain one click away
