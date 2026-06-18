@@ -623,7 +623,7 @@ def _sweep_orphan_clarion_prom_rules(*, out_dir: Path, current_plan_id_prefix: s
     # output is `null`), but `-vvv --log-http-payload` puts the raw HTTP
     # response body on stderr — which contains a JSON object with the
     # ruleNames array. We grep for the line that starts with `{` and has
-    # `"ruleNames":`. Brittle-ish but stable across gcx 0.2.x.
+    # `"ruleNames":`. Brittle-ish but stable across gcx 0.4.x.
     list_result = subprocess.run(
         ["gcx", "kg", "prom-rules", "list", "-vvv", "--log-http-payload"],
         capture_output=True, text=True, check=False,
