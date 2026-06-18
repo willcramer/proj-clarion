@@ -18,11 +18,13 @@ Public surface:
 """
 
 from proj_clarion.agents.external_sources.orchestrator import (
+    ALL_SOURCE_TYPES,
     ExternalSourceSummary,
     gather_external_signals,
 )
 
 __all__ = [
+    "ALL_SOURCE_TYPES",
     "ExternalSourceSummary",
     "gather_external_signals",
 ]

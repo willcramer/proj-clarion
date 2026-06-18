@@ -146,20 +146,58 @@ async def _run_until_marker(
 
 async def _phase_research(
     url: str, company: str | None, *, pipeline_id: str | None = None,
+    disabled_sources: list[str] | None = None,
+    notes: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the research agent against a URL. After it completes, find the
-    newly-created profile JSON and surface its profile_id."""
+    newly-created profile JSON and surface its profile_id.
+
+    `disabled_sources`: external source types (edgar_10k / github_org / …)
+    the SE turned off for this build — forwarded to the CLI as repeated
+    --disable-source flags.
+
+    `notes`: optional operator discovery notes. When present we run the
+    `research-notes --also-fetch` path instead of plain `research`, so the
+    notes are folded in as a trusted source ON TOP of the normal web/
+    external research (the source toggles still apply to that enrichment).
+    """
     yield {"event": "phase", "phase": "research", "status": "started",
            "message": f"Researching {url}"}
 
     # Snapshot pre-run profile mtimes so we can detect the new one
     before = _snapshot_profiles()
 
-    argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main", "research", url]
-    if company:
-        argv += ["--company", company]
-    async for ev in _run_to_completion("research", argv, pipeline_id=pipeline_id):
-        yield ev
+    disable_flags: list[str] = []
+    for s in disabled_sources or []:
+        disable_flags += ["--disable-source", s]
+
+    notes_text = (notes or "").strip()
+    notes_file: Path | None = None
+    try:
+        if notes_text:
+            # research-notes takes a file path argument; stage the notes in
+            # a temp file for the subprocess and clean it up afterwards.
+            import tempfile
+            fd, tmp = tempfile.mkstemp(prefix="clarion-notes-", suffix=".md")
+            os.close(fd)
+            notes_file = Path(tmp)
+            notes_file.write_text(notes_text)
+            argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main",
+                    "research-notes", str(notes_file), "--url", url, "--also-fetch"]
+            if company:
+                argv += ["--company", company]
+            argv += disable_flags
+        else:
+            argv = ["uv", "run", "python", "-m", "proj_clarion.cli.main", "research", url]
+            if company:
+                argv += ["--company", company]
+            argv += disable_flags
+
+        async for ev in _run_to_completion("research", argv, pipeline_id=pipeline_id):
+            yield ev
+    finally:
+        if notes_file is not None:
+            notes_file.unlink(missing_ok=True)
 
     new_profile = _newest_new_profile(before)
     if new_profile is None:
@@ -391,6 +429,8 @@ async def run_demo_pipeline(
     volume_per_day: int | None = None,
     pipeline_id: str | None = None,
     emit_reused_phases: bool = True,
+    disabled_sources: list[str] | None = None,
+    notes: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """The whole flow, or any tail of it.
 
@@ -503,7 +543,10 @@ async def run_demo_pipeline(
         # the early-exit ceiling (stop_idx). When stop_after_phase is
         # set to "research", we research and bail — no plan/approve/etc.
         if start_idx <= _phase_idx("research") <= stop_idx:
-            async for ev in pipe(_phase_research(url, company, pipeline_id=pipeline_id)):
+            async for ev in pipe(_phase_research(
+                url, company, pipeline_id=pipeline_id,
+                disabled_sources=disabled_sources, notes=notes,
+            )):
                 yield ev
                 if ev.get("event") == "phase" and ev.get("status") == "done":
                     profile_id = ev.get("profile_id") or profile_id

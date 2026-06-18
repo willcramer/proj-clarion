@@ -44,6 +44,12 @@ class ResearchState(TypedDict, total=False):
     # steps (plan_sources/fetch_sources/gather_external) may be skipped
     # entirely. None for normal URL-based research.
     notes: str | None
+    # Which external source types (EDGAR / jobs / GitHub / Wikidata) the
+    # gather_external step is allowed to fetch. None (or absent) → all of
+    # them, the historical default. A set restricts to those types; an
+    # empty set disables external enrichment entirely. Lets the SE toggle
+    # individual sources off per-run from the UI / CLI.
+    enabled_sources: set[str] | None
     sources_to_fetch: list[str]
     fetched: list[FetchResult]
     # External-source signals (EDGAR / jobs / GitHub / Wikidata) extracted
@@ -248,10 +254,15 @@ async def gather_external(state: ResearchState) -> ResearchState:
     call sees ~500 tokens per source instead of ~15K. That's the cost
     discipline that makes adding 5 external sources fit in our budget."""
     try:
+        _enabled = state.get("enabled_sources")
         summaries = await gather_external_signals(
             state["target_url"],
             company_name=state.get("company_hint"),
             sigil_conversation_id=state.get("sigil_conversation_id", ""),
+            # set[str] | None on the state; gather_external_signals types it
+            # as set[SourceType] | None. Same underlying string literals —
+            # unknown keys simply never match a fetch task.
+            enabled_sources=_enabled,  # type: ignore[arg-type]
         )
     except Exception as exc:  # noqa: BLE001
         # Even the orchestrator failing shouldn't kill research — it's
@@ -576,11 +587,23 @@ def _sanitize_research_payload(data: dict[str, Any], *, errors: list[str]) -> No
         data["tech_stack_signals"] = cleaned
 
 
-async def run_research(target_url: str, company_hint: str | None = None) -> ResearchState:
-    """Run the full research pass synchronously to completion."""
+async def run_research(
+    target_url: str,
+    company_hint: str | None = None,
+    *,
+    enabled_sources: set[str] | None = None,
+    notes: str | None = None,
+) -> ResearchState:
+    """Run the full research pass synchronously to completion.
+
+    `enabled_sources`: restrict the external enrichment to these source
+    types (None → all). `notes`: optional operator discovery notes folded
+    in as a trusted source alongside the web research."""
     state: ResearchState = {
         "target_url": target_url,
         "company_hint": company_hint,
+        "enabled_sources": enabled_sources,
+        "notes": notes,
         "sources_to_fetch": [],
         "fetched": [],
         "profile": None,
@@ -631,6 +654,7 @@ async def run_research_from_notes(
     company_hint: str | None = None,
     target_url: str | None = None,
     also_fetch: bool = False,
+    enabled_sources: set[str] | None = None,
 ) -> ResearchState:
     """Build a CompanyProfile from operator-supplied discovery notes.
 
@@ -653,6 +677,9 @@ async def run_research_from_notes(
         "target_url": target_url or "https://discovery.local",
         "company_hint": company_hint,
         "notes": notes,
+        # Only consulted on the notes+web path (also_fetch); ignored in
+        # notes-only mode where gather_external never runs.
+        "enabled_sources": enabled_sources,
         "sources_to_fetch": [],
         "fetched": [],
         "profile": None,

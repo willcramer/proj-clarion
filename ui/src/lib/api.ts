@@ -363,6 +363,21 @@ export const PIPELINE_PHASES: PipelinePhase[] = [
   "research", "plan", "approve", "generate", "provision", "kg-publish",
 ];
 
+/** External research source types the SE can toggle per build. Mirrors
+ *  the server's `SourceName` literal (api/routes/pipelines.py), which is
+ *  itself asserted against external_sources.constants.RESEARCH_SOURCE_KEYS. */
+export type ResearchSource =
+  | "edgar_10k" | "greenhouse_jobs" | "lever_jobs" | "github_org" | "wikidata";
+
+/** Display metadata for the per-source toggles, in render order. */
+export const RESEARCH_SOURCES: { key: ResearchSource; label: string; hint: string }[] = [
+  { key: "edgar_10k",       label: "SEC EDGAR",  hint: "Latest 10-K — public companies only" },
+  { key: "github_org",      label: "GitHub",     hint: "Org repos for tech-stack signal" },
+  { key: "greenhouse_jobs", label: "Greenhouse", hint: "Open roles → active initiatives" },
+  { key: "lever_jobs",      label: "Lever",      hint: "Open roles → active initiatives" },
+  { key: "wikidata",        label: "Wikidata",   hint: "Structured company metadata" },
+];
+
 export interface PipelineSummary {
   pipeline_id: string;
   url: string;
@@ -415,6 +430,12 @@ export async function createPipeline(
     /** Override the server-side duplicate-profile guard (the "build new
      *  anyway" path). Omit/false → a 409 if a profile for the host exists. */
     allow_duplicate?: boolean;
+    /** External source types to turn OFF for this build. The research agent
+     *  fetches every source NOT listed. Omit/[] → all sources enabled. */
+    disabled_sources?: ResearchSource[];
+    /** Optional discovery/meeting notes folded into research as a trusted
+     *  source on top of the web/external investigation. */
+    notes?: string;
   },
 ): Promise<PipelineSummary> {
   return request<PipelineSummary>("/pipelines/run", {

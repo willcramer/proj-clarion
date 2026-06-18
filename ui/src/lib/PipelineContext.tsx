@@ -27,7 +27,7 @@ import type { ReactNode } from "react";
 import {
   createPipeline, continuePipeline, getPipeline, getPipelineEvents, getPipelinePhases, listPipelines,
   runPipelineFromPhase, streamPipeline,
-  type PipelineEvent, type PipelinePhase, type PipelineSummary,
+  type PipelineEvent, type PipelinePhase, type PipelineSummary, type ResearchSource,
   PIPELINE_PHASES,
 } from "@/lib/api";
 
@@ -126,6 +126,8 @@ interface PipelineContextValue extends PipelineUiState {
     volume_per_day?: number;
     stop_after_phase?: PipelinePhase;
     allow_duplicate?: boolean;
+    disabled_sources?: ResearchSource[];
+    notes?: string;
   }) => Promise<string>;
   /** Resume from a specific phase. New pipeline_id; parent linkage on the server. */
   startFromPhase: (body: {
@@ -394,6 +396,8 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     volume_per_day?: number;
     stop_after_phase?: PipelinePhase;
     allow_duplicate?: boolean;
+    disabled_sources?: ResearchSource[];
+    notes?: string;
   }) => {
     const summary = await createPipeline(body);
     follow(summary.pipeline_id, {

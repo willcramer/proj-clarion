@@ -16,12 +16,22 @@ from rich.panel import Panel
 from rich.table import Table
 
 from proj_clarion import __version__
+from proj_clarion.agents.external_sources.constants import RESEARCH_SOURCE_KEYS
 from proj_clarion.observability import configure_logging, init_telemetry
 from proj_clarion.schemas import CompanyProfile
 
 PROFILES_DIR = Path("data/profiles")
 PLANS_DIR = Path("data/plans")
 console = Console()
+
+
+def _resolve_enabled_sources(disable_source: tuple[str, ...]) -> set[str] | None:
+    """Translate repeated --disable-source flags into the `enabled_sources`
+    set the research agent expects. No flags → None (all sources enabled,
+    the historical default)."""
+    if not disable_source:
+        return None
+    return set(RESEARCH_SOURCE_KEYS) - set(disable_source)
 
 
 @click.group()
@@ -70,7 +80,14 @@ def doctor(probe: bool) -> None:
 @click.argument("url")
 @click.option("--company", help="Optional company hint")
 @click.option("--out", type=click.Path(path_type=Path), help="Override output path")
-def research(url: str, company: str | None, out: Path | None) -> None:
+@click.option("--disable-source", "disable_source", multiple=True,
+              type=click.Choice(list(RESEARCH_SOURCE_KEYS)),
+              help="Skip an external research source (repeatable). "
+                   "Default: every source enabled.")
+def research(
+    url: str, company: str | None, out: Path | None,
+    disable_source: tuple[str, ...],
+) -> None:
     """Run the Research agent against URL → persist the CompanyProfile.
 
     Persists in two places:
@@ -90,8 +107,12 @@ def research(url: str, company: str | None, out: Path | None) -> None:
 
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
-    console.print(Panel.fit(f"[bold]Research:[/bold] {url}", border_style="cyan"))
-    state = asyncio.run(run_research(url, company_hint=company))
+    enabled_sources = _resolve_enabled_sources(disable_source)
+    skipped = f" (skipping: {', '.join(disable_source)})" if disable_source else ""
+    console.print(Panel.fit(f"[bold]Research:[/bold] {url}{skipped}", border_style="cyan"))
+    state = asyncio.run(run_research(
+        url, company_hint=company, enabled_sources=enabled_sources,
+    ))
 
     if state["errors"]:
         console.print("[yellow]Encountered issues during research:[/yellow]")
@@ -124,9 +145,15 @@ def research(url: str, company: str | None, out: Path | None) -> None:
                    "notes in as a trusted source (requires --url). Default: "
                    "notes-only, no web access.")
 @click.option("--out", type=click.Path(path_type=Path), help="Override output path")
+@click.option("--disable-source", "disable_source", multiple=True,
+              type=click.Choice(list(RESEARCH_SOURCE_KEYS)),
+              help="Skip an external research source (repeatable). Only "
+                   "applies with --also-fetch; notes-only mode hits no "
+                   "external sources regardless.")
 def research_notes(
     notes_path: Path, company: str | None, url: str | None,
     also_fetch: bool, out: Path | None,
+    disable_source: tuple[str, ...],
 ) -> None:
     """Build a CompanyProfile from discovery notes — SKIPS the web research.
 
@@ -159,6 +186,7 @@ def research_notes(
     ))
     state = asyncio.run(run_research_from_notes(
         notes_text, company_hint=company, target_url=url, also_fetch=also_fetch,
+        enabled_sources=_resolve_enabled_sources(disable_source),
     ))
 
     if state["errors"]:

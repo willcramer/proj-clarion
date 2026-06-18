@@ -64,6 +64,18 @@ def _existing_profile_for_host(host: str) -> str | None:
 
 PhaseName = Literal["research", "plan", "approve", "generate", "provision", "kg-publish"]
 
+# External research source types the SE can toggle off per build. Mirrors
+# external_sources.constants.RESEARCH_SOURCE_KEYS; the assert below fails
+# fast at import if the two ever drift.
+SourceName = Literal["edgar_10k", "greenhouse_jobs", "lever_jobs", "github_org", "wikidata"]
+from typing import get_args as _get_args  # noqa: E402
+from proj_clarion.agents.external_sources.constants import (  # noqa: E402
+    RESEARCH_SOURCE_KEYS as _RESEARCH_SOURCE_KEYS,
+)
+assert set(_get_args(SourceName)) == set(_RESEARCH_SOURCE_KEYS), (
+    "SourceName literal is out of sync with RESEARCH_SOURCE_KEYS"
+)
+
 
 class RunPipelineBody(BaseModel):
     url: str
@@ -82,6 +94,13 @@ class RunPipelineBody(BaseModel):
     # SECOND profile for a company already in the library. We 409 in that
     # case unless the caller explicitly opts in here ("Build new anyway").
     allow_duplicate: bool = False
+    # Research-phase controls (research-only flow + full build alike):
+    #   - disabled_sources: external source types the SE turned OFF. The
+    #     research agent fetches every source NOT listed here.
+    #   - notes: optional discovery notes folded in as a trusted source on
+    #     top of the web/external research.
+    disabled_sources: list[SourceName] = Field(default_factory=list)
+    notes: str | None = None
 
 
 class RunFromPhaseBody(BaseModel):
@@ -206,6 +225,8 @@ async def run(body: RunPipelineBody = Body(...)) -> PipelineSummary:
         normalized.url, body.company, days=body.days,
         volume_per_day=body.volume_per_day,
         stop_after_phase=body.stop_after_phase,
+        disabled_sources=list(body.disabled_sources) or None,
+        notes=body.notes,
     )
     summary = _summarise(state)
     if normalized.hints:

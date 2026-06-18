@@ -20,12 +20,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Check, Globe, X, Loader2, FileSearch, Rocket, AlertTriangle, ArrowRight } from "lucide-react";
+import { Check, Globe, X, Loader2, FileSearch, Rocket, AlertTriangle, ArrowRight, ChevronDown, SlidersHorizontal } from "lucide-react";
 
 import { Button } from "@/components/Button";
 import { cn } from "@/lib/cn";
 import { usePipeline } from "@/lib/PipelineContext";
-import { listProfiles, type ProfileSummary } from "@/lib/api";
+import { listProfiles, RESEARCH_SOURCES, type ProfileSummary, type ResearchSource } from "@/lib/api";
 
 /** Canonical host for dedup: lowercased, scheme/www/path stripped. */
 function normalizeHost(s: string): string {
@@ -109,7 +109,23 @@ export function AddProfileModal({
   // Set once the SE chooses to research a company that already has a
   // profile — overrides the duplicate guard for this submission.
   const [forced, setForced] = useState(false);
+  // Research-source toggles. We track the OFF set (empty = all on, the
+  // default) so the common case sends nothing extra to the server.
+  const [disabledSources, setDisabledSources] = useState<Set<ResearchSource>>(new Set());
+  // Optional discovery / meeting notes folded into research as a source.
+  const [notes, setNotes] = useState("");
+  // Whether the "Research options" disclosure is expanded.
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  function toggleSource(key: ResearchSource) {
+    setDisabledSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   // Esc to close. Reset state when the modal opens.
   useEffect(() => {
@@ -119,6 +135,9 @@ export function AddProfileModal({
     setError(null);
     setSubmitting(null);
     setForced(false);
+    setDisabledSources(new Set());
+    setNotes("");
+    setOptionsOpen(false);
     // Autofocus URL field on next tick (after the modal animates in).
     requestAnimationFrame(() => inputRef.current?.focus());
     function onKey(e: KeyboardEvent) {
@@ -158,6 +177,10 @@ export function AddProfileModal({
         volume_per_day: intent === "full_build" ? volumeForPreset(preset) : undefined,
         stop_after_phase: intent === "research_only" ? "research" : "plan",
         allow_duplicate: forced,
+        // Only send the toggles/notes when the SE actually changed them, so
+        // the default request stays identical to the pre-feature shape.
+        disabled_sources: disabledSources.size ? Array.from(disabledSources) : undefined,
+        notes: notes.trim() || undefined,
       });
       onSubmitted(newId);
     } catch (err) {
@@ -341,6 +364,106 @@ export function AddProfileModal({
                 );
               })}
             </div>
+          </div>
+
+          {/* Research options — per-source toggles + discovery notes.
+              Collapsed by default so the form stays focused; the summary
+              line surfaces any non-default choices at a glance. */}
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-canvas-elev2)]/30">
+            <button
+              type="button"
+              onClick={() => setOptionsOpen((v) => !v)}
+              aria-expanded={optionsOpen}
+              className="w-full flex items-center gap-2 px-3 py-2.5 text-left"
+            >
+              <SlidersHorizontal size={14} className="text-[var(--color-text-faint)] shrink-0" />
+              <span className="text-[13px] font-medium text-[var(--color-text)]">Research options</span>
+              <span className="text-[11px] text-[var(--color-text-faint)]">
+                {RESEARCH_SOURCES.length - disabledSources.size}/{RESEARCH_SOURCES.length} sources
+                {notes.trim() ? " · notes added" : ""}
+              </span>
+              <ChevronDown
+                size={15}
+                aria-hidden="true"
+                className={cn(
+                  "ml-auto text-[var(--color-text-faint)] transition-transform",
+                  optionsOpen && "rotate-180",
+                )}
+              />
+            </button>
+
+            {optionsOpen && (
+              <div className="px-3 pb-3 pt-1 space-y-3 border-t border-[var(--color-border)]">
+                <div>
+                  <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5 mt-2">
+                    External sources
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {RESEARCH_SOURCES.map((s) => {
+                      const on = !disabledSources.has(s.key);
+                      return (
+                        <button
+                          key={s.key}
+                          type="button"
+                          role="switch"
+                          aria-checked={on}
+                          onClick={() => toggleSource(s.key)}
+                          title={s.hint}
+                          className={cn(
+                            "flex items-center gap-2 px-2.5 py-2 rounded-md border text-left transition-colors",
+                            on
+                              ? "bg-[var(--color-accent-bg)] border-[color:var(--color-accent-border)] text-[var(--color-text)]"
+                              : "bg-transparent border-[var(--color-border)] text-[var(--color-text-faint)] hover:border-[var(--color-border-strong)]",
+                          )}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "inline-flex items-center justify-center w-4 h-4 rounded-[5px] shrink-0 border",
+                              on
+                                ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]"
+                                : "border-[var(--color-border-strong)] text-transparent",
+                            )}
+                          >
+                            <Check size={11} />
+                          </span>
+                          <span className="text-[13px] font-medium leading-tight">{s.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[11px] text-[var(--color-text-faint)] mt-1.5">
+                    Turn off sources that don&rsquo;t apply (e.g. SEC for a private company).
+                    A source is also skipped when no matching handle is found.
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="add-profile-notes"
+                    className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5 block"
+                  >
+                    Discovery / meeting notes
+                    <span className="ml-2 normal-case text-[10px] font-sans text-[var(--color-text-faint)] tracking-normal">
+                      optional
+                    </span>
+                  </label>
+                  <textarea
+                    id="add-profile-notes"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    rows={4}
+                    placeholder="Paste notes from a discovery call — priorities, stack, pain points. We fold these into research as a trusted source."
+                    className={cn(
+                      "w-full rounded-[10px] resize-y min-h-[88px]",
+                      "bg-[var(--color-canvas)] border border-[var(--color-border-strong)]",
+                      "focus:border-[color:var(--color-accent-border)] outline-none transition-colors",
+                      "text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] p-2.5",
+                    )}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {error && (

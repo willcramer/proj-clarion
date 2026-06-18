@@ -26,6 +26,7 @@ from typing import Awaitable
 
 import structlog
 
+from proj_clarion.agents.external_sources.constants import RESEARCH_SOURCE_KEYS
 from proj_clarion.agents.external_sources.discovery import discover_handles
 from proj_clarion.agents.external_sources.edgar import fetch_edgar_10k
 from proj_clarion.agents.external_sources.extractor import (
@@ -37,6 +38,11 @@ from proj_clarion.agents.external_sources.lever import fetch_lever_jobs
 from proj_clarion.agents.external_sources.wikidata import fetch_wikidata
 
 _logger = structlog.get_logger()
+
+# The full set of external source types this orchestrator knows how to
+# fetch. Defined in the dependency-light `constants` module (so the CLI can
+# import the key list cheaply) and re-exported here as the typed tuple.
+ALL_SOURCE_TYPES: tuple[SourceType, ...] = RESEARCH_SOURCE_KEYS  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -55,6 +61,7 @@ async def gather_external_signals(
     company_name: str | None = None,
     *,
     sigil_conversation_id: str = "",
+    enabled_sources: set[SourceType] | None = None,
 ) -> list[ExternalSourceSummary]:
     """Run the full discovery → fetch → extract pipeline.
 
@@ -62,26 +69,41 @@ async def gather_external_signals(
     came back empty. The caller (research.synthesize_profile) just splices
     each summary into its prompt as one more source block.
 
+    `enabled_sources`: when None (default), all source types are eligible —
+    the historical behaviour. When a set, only those source types are
+    fetched; the rest are skipped before any network call (so the SE can
+    turn off, e.g., the SEC pull on a private company). An empty set means
+    "no external enrichment" and short-circuits to [].
+
     Failure mode philosophy: every step is allowed to no-op independently.
     A DNS hiccup on Greenhouse never blocks EDGAR. A 10-K parse failure
     never blocks the GitHub fetch. The caller sees only the signals that
     actually came back."""
+
+    def _on(stype: SourceType) -> bool:
+        return enabled_sources is None or stype in enabled_sources
+
+    if enabled_sources is not None and not enabled_sources:
+        _logger.info("external.all_disabled", url=target_url)
+        return []
+
     handles = await discover_handles(target_url, company_name=company_name)
     name_for_haiku = company_name or _name_from_handles(handles, target_url)
 
     # Step 1 — fetch all sources in parallel. Each fetcher returns either
     # raw text or None. Wrapping with `_safe` keeps a hang on one source
-    # from holding up the whole gather.
+    # from holding up the whole gather. A source is fetched only when its
+    # handle resolved AND it's enabled (see `enabled_sources`).
     fetch_tasks: dict[SourceType, Awaitable[str | None]] = {}
-    if handles.edgar_cik:
+    if handles.edgar_cik and _on("edgar_10k"):
         fetch_tasks["edgar_10k"] = _safe(fetch_edgar_10k(handles.edgar_cik))
-    if handles.greenhouse_slug:
+    if handles.greenhouse_slug and _on("greenhouse_jobs"):
         fetch_tasks["greenhouse_jobs"] = _safe(fetch_greenhouse_jobs(handles.greenhouse_slug))
-    if handles.lever_slug:
+    if handles.lever_slug and _on("lever_jobs"):
         fetch_tasks["lever_jobs"] = _safe(fetch_lever_jobs(handles.lever_slug))
-    if handles.github_org:
+    if handles.github_org and _on("github_org"):
         fetch_tasks["github_org"] = _safe(fetch_github_org(handles.github_org))
-    if handles.wikidata_url:
+    if handles.wikidata_url and _on("wikidata"):
         fetch_tasks["wikidata"] = _safe(fetch_wikidata(handles.wikidata_url))
 
     if not fetch_tasks:

@@ -199,12 +199,19 @@ def start_pipeline(
     *,
     volume_per_day: int | None = None,
     stop_after_phase: str | None = None,
+    disabled_sources: list[str] | None = None,
+    notes: str | None = None,
 ) -> PipelineState:
     """Full build: research → plan → approve → generate → provision → kg-publish.
 
     `stop_after_phase`: optional cut-off. When set, the pipeline exits
     after that phase completes successfully. Use "research" for a
-    profile-only build (no plan, no Cloud-side provisioning)."""
+    profile-only build (no plan, no Cloud-side provisioning).
+
+    `disabled_sources` / `notes`: research-phase controls forwarded to the
+    research CLI — which external source types to skip, and optional
+    discovery notes to fold in as a trusted source. Transient (consumed by
+    the research phase of this run); not persisted on the pipeline row."""
     return _spawn(
         url=url, company=company, days=days,
         trigger="full", starting_phase=None,
@@ -212,6 +219,8 @@ def start_pipeline(
         runner_kwargs={
             "volume_per_day": volume_per_day,
             "stop_after_phase": stop_after_phase,
+            "disabled_sources": disabled_sources,
+            "notes": notes,
         },
     )
 

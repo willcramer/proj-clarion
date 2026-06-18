@@ -10,6 +10,24 @@ from __future__ import annotations
 
 import os
 
+# Canonical external source-type keys, in display order. Single source of
+# truth shared by the orchestrator (which fetches them), the CLI
+# (--disable-source choices), and — via the API — the UI's per-source
+# toggles, so the layers can't drift. Kept in this dependency-light module
+# so the CLI can import it without pulling in the heavy fetcher stack.
+RESEARCH_SOURCE_KEYS: tuple[str, ...] = (
+    "edgar_10k", "greenhouse_jobs", "lever_jobs", "github_org", "wikidata",
+)
+
+# Human-friendly labels for each source key (UI checkboxes / CLI help).
+RESEARCH_SOURCE_LABELS: dict[str, str] = {
+    "edgar_10k": "SEC EDGAR (10-K)",
+    "greenhouse_jobs": "Greenhouse job board",
+    "lever_jobs": "Lever job board",
+    "github_org": "GitHub org",
+    "wikidata": "Wikidata",
+}
+
 # Per-fetch HTTP timeout. Each source is one or two HTTP calls; if any
 # takes longer than this we skip it. Honest empty beats slow-blocking.
 SOURCE_FETCH_TIMEOUT_S: float = 10.0
