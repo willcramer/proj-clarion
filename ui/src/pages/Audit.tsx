@@ -33,7 +33,7 @@ export function AuditPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        eyebrow="Audit"
+        eyebrow="Activity Log"
         title="Everything that happened."
         lede="Every demo emitter that's spun up on this stack, every plan-state transition, and every profile extension. Each section pages independently, newest first."
       />

@@ -238,7 +238,7 @@ function BuildHistoryView() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Builds"
+        eyebrow="Demo Builds"
         title="Every build, live or done."
         lede="Phase, duration, status. Click any row to open its live view. Start a new build from the dashboard."
       />

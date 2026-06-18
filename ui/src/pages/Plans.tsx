@@ -101,7 +101,7 @@ export function PlansListPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Plans"
+        eyebrow="Demo Plans"
         title="Every plan, ready to review."
         lede="DemoPlans the planner produced. Open one to inspect the graph, approve, refine with the assistant, or start a live demo."
       />

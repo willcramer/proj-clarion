@@ -124,7 +124,7 @@ export function ProfilesListPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Profiles"
+        eyebrow="Company Profiles"
         title="Researched companies."
         lede="CompanyProfiles produced by the research agent. Open one to inspect its signals or extend it with the assistant."
         actions={

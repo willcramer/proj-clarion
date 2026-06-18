@@ -31,9 +31,9 @@ import { useAssistant } from "@/lib/AssistantContext";
 // dedicated "Dashboard" item here would be redundant. We keep the nav
 // focused on the secondary surfaces the SE drills into.
 const NAV = [
-  { to: "/new",      label: "Builds",   icon: Sparkles      },
-  { to: "/profiles", label: "Profiles", icon: ScrollText    },
-  { to: "/plans",    label: "Plans",    icon: ClipboardList },
+  { to: "/profiles", label: "Company Profiles", icon: ScrollText    },
+  { to: "/plans",    label: "Demo Plans",       icon: ClipboardList },
+  { to: "/new",      label: "Demo Builds",      icon: Sparkles      },
 ];
 
 // Secondary nav, surfaced via UserMenu so they remain one click away
@@ -51,7 +51,7 @@ const hasOnePager = Object.keys(import.meta.glob("../pages/OnePager.tsx")).lengt
 export const SECONDARY_NAV = [
   ...(hasOnePager ? [{ to: "/one-pager", label: "One-pager", icon: FileText }] : []),
   { to: "/runs",  label: "Runs",  icon: Activity },
-  { to: "/audit", label: "Audit", icon: History  },
+  { to: "/audit", label: "Activity Log", icon: History  },
   // /about explains the project + arch + observability surfaces; useful
   // in customer demos as a "what is this thing" landing surface.
   { to: "/about", label: "About", icon: Boxes    },

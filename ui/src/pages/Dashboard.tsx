@@ -22,14 +22,15 @@ import { useNavigate } from "react-router-dom";
 import {
   ClipboardList, ScrollText, Database, Hammer, ChevronRight, ChevronDown,
   ArrowRight, Sparkles, Trash2, ExternalLink, Loader2, AlertTriangle,
-  CheckCircle2, AlertCircle, Square, Wand2,
+  CheckCircle2, AlertCircle, Square, Wand2, SlidersHorizontal, Check,
 } from "lucide-react";
 
 import {
   getDashboardSummary, listPlans, listProfiles, listPipelines,
   listDemoSessions, listOrphanFolders, deleteOrphanFolder, stopDemoSession,
+  RESEARCH_SOURCES,
   type DashboardSummary, type OrphanFolder, type PlanSummary,
-  type ProfileSummary, type PipelineSummary, type DemoSession,
+  type ProfileSummary, type PipelineSummary, type DemoSession, type ResearchSource,
 } from "@/lib/api";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -173,7 +174,23 @@ function CommandBar() {
   // When the typed URL already has a profile, we surface a guard instead
   // of blindly researching the same company again.
   const [dup, setDup] = useState<ProfileSummary | null>(null);
+  // Advanced customization: by default "Build demo" runs the OOTB pipeline.
+  // Expanding Advanced lets the SE turn individual research sources off and
+  // attach discovery notes before kicking the build off.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [disabledSources, setDisabledSources] = useState<Set<ResearchSource>>(new Set());
+  const [notes, setNotes] = useState("");
   const presetMeta = PRESETS.find((p) => p.id === preset)!;
+  const customized = disabledSources.size > 0 || notes.trim().length > 0;
+
+  function toggleSource(key: ResearchSource) {
+    setDisabledSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   function existingProfileFor(input: string): ProfileSummary | null {
     const host = normalizeHost(input);
@@ -200,7 +217,14 @@ function CommandBar() {
       // approves the plan, then provisions explicitly.
       setBusy(true);
       try {
-        await pipeline.start({ url: t, days: 1, volume_per_day: presetMeta.volume, stop_after_phase: "plan", allow_duplicate: !!opts?.force });
+        await pipeline.start({
+          url: t, days: 1, volume_per_day: presetMeta.volume,
+          stop_after_phase: "plan", allow_duplicate: !!opts?.force,
+          // Advanced customizations — only sent when the SE changed them, so
+          // the default OOTB request shape is unchanged.
+          disabled_sources: disabledSources.size ? Array.from(disabledSources) : undefined,
+          notes: notes.trim() || undefined,
+        });
         navigate("/new");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -284,8 +308,111 @@ function CommandBar() {
 
       <div className="flex items-center justify-between gap-3 mt-2.5 px-1 flex-wrap">
         <PipelineHint />
-        <span className="font-mono text-[11px] text-[var(--color-text-faint)] shrink-0">⌘↵ to run</span>
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            className={cn(
+              "inline-flex items-center gap-1.5 text-[12px] rounded-md px-1.5 py-1 transition-colors",
+              advancedOpen || customized
+                ? "text-[var(--color-accent)]"
+                : "text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)]",
+            )}
+            title="Customize which research sources run and attach discovery notes"
+          >
+            <SlidersHorizontal size={13} aria-hidden="true" />
+            Advanced
+            {customized && (
+              <span className="font-mono text-[10px]">
+                · {RESEARCH_SOURCES.length - disabledSources.size}/{RESEARCH_SOURCES.length} sources
+                {notes.trim() ? " · notes" : ""}
+              </span>
+            )}
+            <ChevronDown
+              size={13}
+              aria-hidden="true"
+              className={cn("transition-transform", advancedOpen && "rotate-180")}
+            />
+          </button>
+          <span className="font-mono text-[11px] text-[var(--color-text-faint)]">⌘↵ to run</span>
+        </div>
       </div>
+
+      {/* Advanced — customize the research before building. Collapsed by
+          default so the OOTB "Build demo" path stays a single action. */}
+      {advancedOpen && (
+        <div className="mt-2.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-canvas-elev1)] px-4 py-3.5 space-y-3.5 text-left">
+          <div>
+            <div className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
+              Research sources
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              {RESEARCH_SOURCES.map((s) => {
+                const on = !disabledSources.has(s.key);
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    role="switch"
+                    aria-checked={on}
+                    onClick={() => toggleSource(s.key)}
+                    title={s.hint}
+                    className={cn(
+                      "flex items-center gap-2 px-2.5 py-2 rounded-md border text-left transition-colors",
+                      on
+                        ? "bg-[var(--color-accent-bg)] border-[color:var(--color-accent-border)] text-[var(--color-text)]"
+                        : "bg-transparent border-[var(--color-border)] text-[var(--color-text-faint)] hover:border-[var(--color-border-strong)]",
+                    )}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "inline-flex items-center justify-center w-4 h-4 rounded-[5px] shrink-0 border",
+                        on
+                          ? "bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-on-accent)]"
+                          : "border-[var(--color-border-strong)] text-transparent",
+                      )}
+                    >
+                      <Check size={11} />
+                    </span>
+                    <span className="text-[13px] font-medium leading-tight">{s.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-[11px] text-[var(--color-text-faint)] mt-1.5">
+              Turn off sources that don&rsquo;t apply (e.g. SEC for a private company).
+              A source is also skipped when no matching handle is found.
+            </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="hero-notes"
+              className="text-[11px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5 block"
+            >
+              Discovery / meeting notes
+              <span className="ml-2 normal-case text-[10px] font-sans text-[var(--color-text-faint)] tracking-normal">
+                optional · folded into research as a trusted source
+              </span>
+            </label>
+            <textarea
+              id="hero-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Paste notes from a discovery call — priorities, stack, pain points."
+              className={cn(
+                "w-full rounded-[10px] resize-y min-h-[72px]",
+                "bg-[var(--color-canvas)] border border-[var(--color-border-strong)]",
+                "focus:border-[color:var(--color-accent-border)] outline-none transition-colors",
+                "text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] p-2.5",
+              )}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -400,10 +527,10 @@ function KpiBand({ summary, buildsTotal }: { summary?: DashboardSummary; buildsT
     label: string; value: string; tone: string; icon: ComponentType<{ size?: number; className?: string }>;
     spark: number[]; to: string;
   }[] = [
-    { label: "Plans",    value: fmtNum(summary?.plans_total),         tone: "var(--color-accent)", icon: ClipboardList, spark: [4, 6, 5, 8, 7, 9, 12], to: "/plans" },
-    { label: "Profiles", value: fmtNum(summary?.profiles_total),      tone: "var(--color-info)",   icon: ScrollText,    spark: [2, 3, 5, 4, 6, 7, 8],  to: "/profiles" },
-    { label: "Events",   value: fmtNum(summary?.business_events_total), tone: "var(--color-accent)", icon: Database,    spark: [5, 7, 6, 9, 8, 11, 10, 13], to: "/audit" },
-    { label: "Builds",   value: fmtNum(buildsTotal),                  tone: "var(--color-signal)", icon: Hammer,        spark: [2, 4, 3, 5, 4, 6, 7],  to: "/new" },
+    { label: "Company Profiles", value: fmtNum(summary?.profiles_total),      tone: "var(--color-info)",   icon: ScrollText,    spark: [2, 3, 5, 4, 6, 7, 8],  to: "/profiles" },
+    { label: "Demo Plans",       value: fmtNum(summary?.plans_total),         tone: "var(--color-accent)", icon: ClipboardList, spark: [4, 6, 5, 8, 7, 9, 12], to: "/plans" },
+    { label: "Demo Builds",      value: fmtNum(buildsTotal),                  tone: "var(--color-signal)", icon: Hammer,        spark: [2, 4, 3, 5, 4, 6, 7],  to: "/new" },
+    { label: "Activity Log",     value: fmtNum(summary?.business_events_total), tone: "var(--color-accent)", icon: Database,    spark: [5, 7, 6, 9, 8, 11, 10, 13], to: "/audit" },
   ];
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
