@@ -415,9 +415,9 @@ export interface PipelinePhaseRow {
  *  runs as a background task on the API process. Use streamPipeline(id)
  *  to follow it (works even if the user navigates away and comes back).
  *
- *  `volume_per_day` overrides the planner's auto-derived event volume
- *  (default auto-scales 1.5K-5K/day by channel count). 500 = quick
- *  smoke build, 25K+ = stress test. Range [100, 100000]. */
+ *  `volume_per_day` overrides the planner's auto-derived business-event
+ *  volume (default auto-scales 1.5K-5K events/day by channel count).
+ *  500 = quick smoke build, 25K+ = stress test. Range [100, 100000]. */
 export async function createPipeline(
   body: {
     url: string;
