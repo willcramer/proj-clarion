@@ -113,6 +113,74 @@ def research(url: str, company: str | None, out: Path | None) -> None:
     )
 
 
+@cli.command("research-notes")
+@click.argument("notes_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--company", help="Company name / hint to anchor the profile")
+@click.option("--url", "url", default=None,
+              help="Optional primary URL to record on the profile (and to "
+                   "fetch from when --also-fetch is set)")
+@click.option("--also-fetch", is_flag=True, default=False,
+              help="ALSO run the normal web/external research and fold the "
+                   "notes in as a trusted source (requires --url). Default: "
+                   "notes-only, no web access.")
+@click.option("--out", type=click.Path(path_type=Path), help="Override output path")
+def research_notes(
+    notes_path: Path, company: str | None, url: str | None,
+    also_fetch: bool, out: Path | None,
+) -> None:
+    """Build a CompanyProfile from discovery notes — SKIPS the web research.
+
+    Reads NOTES_PATH (a text/markdown file, e.g. notes from a customer
+    discovery call) and synthesizes a CompanyProfile from it via the LLM,
+    WITHOUT the SEC/GitHub/jobs/Wikidata investigation. Persisted to Postgres
+    + data/profiles/ exactly like `research`, so `plan run <profile>` works
+    unchanged.
+
+    Use `--also-fetch --url <site>` when you DO want the deep-dive enrichment
+    layered on top of your notes.
+    """
+    from proj_clarion.agents.research import run_research_from_notes
+    from proj_clarion.storage import ProfileRepo, session_scope
+
+    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    notes_text = notes_path.read_text()
+    if not notes_text.strip():
+        console.print(f"[red]Notes file is empty:[/red] {notes_path}")
+        sys.exit(2)
+    if also_fetch and not url:
+        console.print("[red]--also-fetch requires --url[/red]")
+        sys.exit(2)
+
+    mode = "notes + web research" if also_fetch else "notes-only (no web access)"
+    console.print(Panel.fit(
+        f"[bold]Research from notes:[/bold] {notes_path.name}\n"
+        f"mode: {mode}",
+        border_style="cyan",
+    ))
+    state = asyncio.run(run_research_from_notes(
+        notes_text, company_hint=company, target_url=url, also_fetch=also_fetch,
+    ))
+
+    if state["errors"]:
+        console.print("[yellow]Encountered issues during synthesis:[/yellow]")
+        for e in state["errors"]:
+            console.print(f"  • {e}")
+    if not state["profile"]:
+        console.print("[red]No profile produced.[/red]")
+        sys.exit(2)
+
+    profile = state["profile"]
+    out_path = out or (PROFILES_DIR / f"{profile.profile_id}.json")
+    out_path.write_text(profile.model_dump_json(indent=2))
+    with session_scope() as s:
+        ProfileRepo().upsert(s, profile)
+    console.print(
+        f"[green]Wrote[/green] {out_path} + persisted to Postgres "
+        f"([dim]{profile.profile_id}[/dim])\n"
+        f"[dim]Next:[/dim] just plan {out_path}"
+    )
+
+
 @cli.group("profile")
 def profile_group() -> None:
     """Inspect generated CompanyProfiles."""

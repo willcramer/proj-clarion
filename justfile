@@ -65,6 +65,13 @@ db-reset:
 research url:
     uv run python -m proj_clarion.cli.main research "{{url}}"
 
+# Build a CompanyProfile from discovery notes — SKIPS the web research.
+# Notes-only by default (no web access); pass `--also-fetch --url <site>`
+# to layer the deep-dive enrichment on top. Then `just plan <profile>`.
+#   just research-notes notes.md --company "KFC"
+research-notes notes_path *args:
+    uv run python -m proj_clarion.cli.main research-notes "{{notes_path}}" {{args}}
+
 # Pretty-print the most recent CompanyProfile
 show-profile:
     uv run python -m proj_clarion.cli.main profile show

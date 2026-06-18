@@ -39,6 +39,11 @@ _logger = structlog.get_logger()
 class ResearchState(TypedDict, total=False):
     target_url: str
     company_hint: str | None
+    # Operator-supplied discovery notes (notes-driven research path). When
+    # set, synthesize_profile injects them as a trusted source; the gather
+    # steps (plan_sources/fetch_sources/gather_external) may be skipped
+    # entirely. None for normal URL-based research.
+    notes: str | None
     sources_to_fetch: list[str]
     fetched: list[FetchResult]
     # External-source signals (EDGAR / jobs / GitHub / Wikidata) extracted
@@ -277,6 +282,22 @@ async def synthesize_profile(state: ResearchState) -> ResearchState:
 
     src_blocks: list[str] = []
     src_index = 0  # incremented per emitted source so citation_ids stay unique
+
+    # Operator-supplied discovery notes (e.g. from a customer discovery call)
+    # are injected as a first-class, trusted source so the synthesize agent
+    # grounds the profile in what the SE actually learned. Used by the
+    # notes-driven path (run_research_from_notes); in notes-only mode this is
+    # the sole source block.
+    _notes = (state.get("notes") or "").strip()
+    if _notes:
+        src_index += 1
+        src_blocks.append(
+            f"=== src-{src_index:03d} ===\n"
+            f"url: (operator discovery notes)\n"
+            f"title: Discovery notes / SE input\n"
+            f"text:\n{_notes}\n"
+        )
+
     for r in state["fetched"]:
         if r.error or not r.text:
             continue
@@ -594,6 +615,61 @@ async def run_research(target_url: str, company_hint: str | None = None) -> Rese
         total=len(state["fetched"]),
         external_summaries=len(state.get("external_summaries") or []),
     )
+
+    state = await synthesize_profile(state)
+    if state["profile"]:
+        _logger.info("research.synth.ok", profile_id=state["profile"].profile_id)
+    else:
+        _logger.warning("research.synth.failed", errors=state["errors"])
+
+    return state
+
+
+async def run_research_from_notes(
+    notes: str,
+    *,
+    company_hint: str | None = None,
+    target_url: str | None = None,
+    also_fetch: bool = False,
+) -> ResearchState:
+    """Build a CompanyProfile from operator-supplied discovery notes.
+
+    Makes the web/external investigation OPTIONAL. The notes become a
+    trusted source feeding the same `synthesize_profile` step the URL-based
+    path uses, so the resulting profile is a drop-in for the plan phase
+    (`plan run <profile>` works unchanged).
+
+    Modes:
+      * notes-only (default): skip plan_sources / fetch_sources /
+        gather_external — synthesize straight from `notes`, no web access.
+      * notes + web (`also_fetch=True`, requires `target_url`): run the
+        normal gathering steps AND fold the notes in as a trusted source —
+        the deep-dive enrichment layered on top of discovery findings.
+    """
+    state: ResearchState = {
+        # A real URL when supplied (recorded on the profile / used for fetch);
+        # otherwise a benign placeholder so target_url-dependent helpers
+        # (e.g. prior-accepted-claims lookup) stay well-defined.
+        "target_url": target_url or "https://discovery.local",
+        "company_hint": company_hint,
+        "notes": notes,
+        "sources_to_fetch": [],
+        "fetched": [],
+        "profile": None,
+        "errors": [],
+        "sigil_conversation_id": f"clarion-research-notes-{uuid.uuid4().hex[:12]}",
+    }
+
+    if also_fetch and target_url:
+        _logger.info("research.notes.start", mode="notes+web", url=target_url)
+        state = await plan_sources(state)
+        import asyncio as _asyncio
+        state, _ = await _asyncio.gather(
+            fetch_sources(state),
+            gather_external(state),
+        )
+    else:
+        _logger.info("research.notes.start", mode="notes-only")
 
     state = await synthesize_profile(state)
     if state["profile"]:
