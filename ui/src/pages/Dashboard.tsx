@@ -46,8 +46,8 @@ type BuildPreset = "smoke" | "demo" | "auto" | "stress";
 const PRESETS: { id: BuildPreset; label: string; sub: string; volume?: number }[] = [
   { id: "smoke",  label: "Smoke",  sub: "500 events/day",  volume: 500 },
   { id: "demo",   label: "Demo",   sub: "2.5K events/day", volume: 2_500 },
-  { id: "auto",   label: "Auto",   sub: "auto-scaled" },
   { id: "stress", label: "Stress", sub: "25K events/day",  volume: 25_000 },
+  { id: "auto",   label: "Auto",   sub: "auto-scaled" },
 ];
 
 function isUrlLike(text: string): boolean {

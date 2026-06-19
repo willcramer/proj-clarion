@@ -46,8 +46,8 @@ const PRESETS: {
 }[] = [
   { value: "smoke",  title: "Smoke",  sub: "500 events/day",  eta: "2m",     blurb: "Fastest iteration. ~2-3 min build." },
   { value: "demo",   title: "Demo",   sub: "2.5K events/day", eta: "6m",     blurb: "Default walk-through volume." },
-  { value: "auto",   title: "Auto",   sub: "auto-scaled",     eta: "varies", blurb: "Let the planner auto-scale." },
   { value: "stress", title: "Stress", sub: "25K events/day",  eta: "12m",    blurb: "Pressure-tests ingest. Burns quota." },
+  { value: "auto",   title: "Auto",   sub: "auto-scaled",     eta: "varies", blurb: "Let the planner auto-scale." },
 ];
 
 function volumeForPreset(p: AddProfilePreset): number | undefined {
