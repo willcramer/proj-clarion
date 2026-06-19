@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.9.0] — Research customization + homepage clarity (2026-06-18)
+
+Bring the research agent's per-source controls and discovery-notes input
+into the UI (previously CLI-only or not exposed at all), and tighten the
+homepage so an SE can tell at a glance what each build does and start one
+either out-of-the-box or customized.
+
+### Added
+
+- **Per-source research toggles.** The research agent's five external
+  sources (SEC EDGAR, GitHub org, Greenhouse, Lever, Wikidata) can now be
+  turned off individually for a build — e.g. skip the SEC pull on a private
+  company. Default is all-on, so existing behavior is unchanged.
+  - `gather_external_signals(..., enabled_sources=...)` filters which
+    sources are fetched before any network call; an empty set short-circuits
+    to no external enrichment.
+  - Threaded end to end: `run_research` / `run_research_from_notes`
+    (`enabled_sources`) → CLI `--disable-source` (repeatable, on both
+    `research` and `research-notes`) → pipeline `_phase_research` →
+    `run_demo_pipeline` / `start_pipeline` (via `runner_kwargs`) → API
+    `RunPipelineBody.disabled_sources`.
+  - **UI:** a collapsible **"Research options"** section in the Profiles
+    "Add profile" modal, and an **"Advanced"** disclosure under the
+    dashboard hero build bar, each with the five toggles.
+- **Discovery / meeting notes in the build form.** Paste notes from a
+  discovery call into the UI; they're folded into research as a trusted
+  source on top of the web/external investigation (the
+  `research-notes --also-fetch` path). Previously reachable only via the
+  CLI. Wired through `RunPipelineBody.notes` → pipeline → research agent.
+- **Single source of truth for source keys.**
+  `external_sources.constants.RESEARCH_SOURCE_KEYS` / `RESEARCH_SOURCE_LABELS`,
+  re-exported as `ALL_SOURCE_TYPES`, mirrored by the API `SourceName`
+  literal with an import-time assert guarding against drift. UI mirrors it
+  via `RESEARCH_SOURCES` in `lib/api.ts`.
+- **Unit tests** (`tests/unit/test_research_sources.py`) covering the key
+  list, the literal-sync guard, the disabled→enabled translation, and the
+  empty-set short-circuit.
+
+### Changed
+
+- **Top nav** reordered and relabeled for clarity: **Company Profiles ·
+  Demo Plans · Demo Builds** (was Builds · Profiles · Plans).
+- **Dashboard overview cards** reordered and relabeled: **Company Profiles ·
+  Demo Plans · Demo Builds · Activity Log** (was Plans · Profiles · Events ·
+  Builds).
+- **Descriptive renames** applied consistently across nav, overview cards,
+  and page headers: Profiles → *Company Profiles*, Plans → *Demo Plans*,
+  Builds → *Demo Builds*, Events/Audit → *Activity Log* (card, the `/audit`
+  page header, and the secondary-nav item). Routes and internal identifiers
+  are unchanged.
+- **Build-size presets now carry units.** Labels read `500 events/day`,
+  `2.5K events/day`, `25K events/day` (was bare `500/day`, etc.) — the value
+  maps to `DataBlueprint.business_event_volume_per_day`, the count of
+  synthetic business events generated per day. The Auto preset reads
+  `auto-scaled`.
+- **Build-size preset order** is now Smoke · Demo · Stress · Auto (fixed
+  volumes ascending, then the auto preset last), in both the hero selector
+  and the Add-profile modal.
+- **Demo Builds nav icon** changed from Sparkles to Hammer to match the
+  overview card.
+
+### Notes
+
+- The research toggles and notes are transient — consumed by the research
+  phase of a run and passed via `runner_kwargs`; no pipeline-row schema
+  change.
+
 ## [0.8.0] — AI obs: streaming, caching, tool calls, guardrails, heartbeat (2026-05-18)
 
 Six P0/P1/P2 changes landing together so the AI-observability story extends
